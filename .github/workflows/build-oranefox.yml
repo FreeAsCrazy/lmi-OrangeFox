@@ -133,6 +133,12 @@ jobs:
 
           # A16 manifest 没有 hardware/qcom/bootctrl，删掉无效的 namespace import
           sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp
+          # bootctrl 的 defaults/srcs 全在 hardware/qcom/bootctrl（A16 不存在），lmi 非 A/B 设备用不到
+          rm -rf device/xiaomi/lmi/bootctrl
+          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk
+
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
 
           # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
           sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
