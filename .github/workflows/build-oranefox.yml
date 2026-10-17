@@ -10,7 +10,6 @@ on:
         type: choice
         options:
           - fox_16.0
-          - fox_14.1
 
 concurrency:
   group: orangefox-lmi-build
