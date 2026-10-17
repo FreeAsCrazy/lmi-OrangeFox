@@ -102,10 +102,10 @@ jobs:
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
-          # 去掉 Magisk 集成
-          sed -i '/OF_USE_MAGISKBOOT/d' device/xiaomi/lmi/vendorsetup.sh
-          sed -i '/OF_USE_MAGISKBOOT_FOR_ALL_PATCHES/d' device/xiaomi/lmi/vendorsetup.sh
-          sed -i '/FOX_USE_SPECIFIC_MAGISK_ZIP/d' device/xiaomi/lmi/vendorsetup.sh
+          # 去掉 Magisk 集成（只删 export 语句，模式加 export 前缀避免误删 if 行导致语法错误）
+          sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
+            -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
+            -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
 
           # 默认简体中文
           sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
