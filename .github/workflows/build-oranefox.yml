@@ -99,6 +99,16 @@ jobs:
             https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git \
             device/xiaomi/lmi
 
+          # 换 A16 内核（AstideLabs sm8250 android16，含 erofs 支持，挂载 Android 16 的 system 需要）
+          # 格式转换：裸 Image → gzip 后拼 dtb = Image.gz-dtb（设备树 BoardConfig 的要求）
+          AK_URL="https://github.com/AstideLabs/android_kernel_xiaomi_sm8250/releases/download/v20260821-a8adb967/APTKernel_AOSP_lmi_NoKernelSU_20260821_095834_anykernel3_a8adb967.zip"
+          curl -sSL --retry 3 "$AK_URL" -o /tmp/ak3.zip
+          unzip -q -o /tmp/ak3.zip -d /tmp/ak3
+          gzip -9 -c /tmp/ak3/kernels/aosp/Image > device/xiaomi/lmi/prebuilt/Image.gz-dtb
+          cat /tmp/ak3/kernels/aosp/dtb >> device/xiaomi/lmi/prebuilt/Image.gz-dtb
+          cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
+          cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
+
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
