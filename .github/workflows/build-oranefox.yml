@@ -136,6 +136,12 @@ jobs:
             -e '/TW_INCLUDE_INJECTTWRP/d' \
             {} +
 
+          # test/vts 等已从 sync 排除，但 vts/tvts 仍在 main.mk 的 test-suite 依赖展开循环中，
+          # 其 COMPATIBILITY_TESTCASES_OUT_* 未定义会拼出 /lib/libbase.so（kati writing to readonly directory 报错）。
+          # 跳过 vts/tvts（recoveryimage 不依赖它们），grep 断言防止 A16 源码格式差异导致 sed 静默失配
+          sed -i 's/device-tests vts tvts art-host-tests/device-tests art-host-tests/' build/make/core/main.mk
+          grep -q 'general-tests device-tests art-host-tests host-unit-tests' build/make/core/main.mk
+
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
