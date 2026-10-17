@@ -62,7 +62,9 @@ jobs:
         run: |
           cd /home/runner/fox_build
           mkdir -p device/xiaomi
-          cp -r ${{ github.workspace }}/device_xiaomi_lmi-TWRP device/xiaomi/lmi
+          git clone --depth=1 -b fox-12.1 \
+            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git \
+            device/xiaomi/lmi
 
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
