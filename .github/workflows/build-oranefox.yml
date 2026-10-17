@@ -134,6 +134,9 @@ jobs:
           # A16 manifest 没有 hardware/qcom/bootctrl，删掉无效的 namespace import
           sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp
 
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
+
           # A16 lunch 必须三段式，release 用 bp2a（aosp_current 的目标，trunk_staging 在 A16 不存在）
           sed -i 's/twrp_lmi-eng/twrp_lmi-bp2a-eng/' device/xiaomi/lmi/AndroidProducts.mk
 
