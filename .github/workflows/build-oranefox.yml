@@ -95,6 +95,8 @@ jobs:
           done
           [ "$success" = true ]
           rm -rf .repo
+          # GKI 内核 prebuilts 与 recovery 无关，但其 Android.bp 会显著加大 soong 分析内存（16GB runner 上曾因内存峰值被宿主回收 VM）
+          rm -rf kernel/prebuilts
           df -h /
 
       - name: 放入设备树并应用补丁
@@ -167,13 +169,17 @@ jobs:
 
       - name: 编译 Recovery
         run: |
-          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 8G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=8192; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
+          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 16G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=16384; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
           mkdir -p /home/runner/output
           free -h
           df -h /
+          # 内存 watchdog：每 30 秒输出内存快照，若 runner 再被宿主回收可作证据
+          ( while true; do echo "[$(date +%H:%M:%S)] $(free -h | awk '/^Mem:/{print "mem_used="$3" mem_avail="$4} /^Swap:/{print "swap_used="$3}')"; sleep 30; done ) &
           cd /home/runner/fox_build
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
+          # 限制 Go 堆目标（soong_build 是 Go 程序），压住 soong 分析 Android.bp 的内存峰值
+          export GOMEMLIMIT=12GiB
           export SKIP_ABI_CHECKS=true
           export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
           export LC_ALL=C
