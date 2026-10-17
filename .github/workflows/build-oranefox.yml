@@ -147,9 +147,17 @@ jobs:
              bootable/recovery/gui/theme/common/languages/en.xml
           rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
 
+          # A16 API 适配
+          sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
+          sed -i 's/PRODUCT_TARGET_VNDK_VERSION := 31/PRODUCT_TARGET_VNDK_VERSION := 36/' device/xiaomi/lmi/device.mk
+
+          # 让 manifest 提供 twrp-common（避免拉 12.1 版本冲突）
+          rm -f device/xiaomi/lmi/twrp.dependencies
+
       - name: 编译 Recovery
         run: |
           sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 8G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=8192; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
+          mkdir -p /home/runner/output
           free -h
           df -h /
           cd /home/runner/fox_build
@@ -162,8 +170,20 @@ jobs:
           export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
           export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
           export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
-          lunch twrp_lmi-eng || lunch twrp_lmi-trunk_staging-eng
-          mka recoveryimage -j$(($(nproc) * 2))
+          lunch twrp_lmi-eng \
+            || lunch twrp_lmi-trunk_staging-eng \
+            || lunch twrp_lmi-ap3a-eng \
+            || lunch twrp_lmi-ap2a-eng
+          set -o pipefail
+          mka recoveryimage -j$(($(nproc) * 2)) 2>&1 | tee /home/runner/output/build.log
+
+      - name: 上传编译日志（失败时）
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-log
+          path: /home/runner/output/build.log
+          retention-days: 7
 
       - name: 复制产物
         run: |
