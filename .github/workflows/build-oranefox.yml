@@ -34,13 +34,18 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           PKGS="git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            libc6-dev-i386 libncurses5 libncurses5-dev x11proto-core-dev libx11-dev \
+            libc6-dev-i386 libncurses-dev x11proto-core-dev libx11-dev \
             libgl1-mesa-dev libxml2-utils xsltproc fontconfig python3 python3-pip \
             openjdk-17-jdk bc g++-multilib gcc-multilib libssl-dev libelf-dev"
           sudo -E apt-get install -yq --no-install-recommends $PKGS || {
             sudo apt-get update
             sudo -E apt-get install -yq --no-install-recommends $PKGS
           }
+          # noble 移除了 libncurses5，但 AOSP prebuilt clang 运行需要 libncurses.so.5，从 focal 池补装
+          N=6.2-0ubuntu2.1
+          curl -fsSL --retry 3 -O "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_${N}_amd64.deb"
+          curl -fsSL --retry 3 -O "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_${N}_amd64.deb"
+          sudo dpkg -i "libtinfo5_${N}_amd64.deb" "libncurses5_${N}_amd64.deb"
           sudo apt-get clean
 
       - name: 初始化 repo 并同步源码
