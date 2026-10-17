@@ -95,9 +95,9 @@ jobs:
           done
           [ "$success" = true ]
           rm -rf .repo
-          # GKI 内核 prebuilts 与 recovery 无关，但其 Android.bp 会显著加大 soong 分析内存（16GB runner 上曾因内存峰值被宿主回收 VM）
-          # rust/NDK 工具链 recovery 同样用不到，其 Android.bp 数百个 prebuilt 模块是 soong 分析内存大户；一并删除省内存省磁盘
-          rm -rf kernel/prebuilts prebuilts/rust prebuilts/ndk
+          # GKI 内核 prebuilts 与 recovery 无关，其 Android.bp 加大 soong 分析内存，删除
+          # （rust/NDK 不可删：A16 bionic libc 的 librustlibs.a 硬依赖 prebuilts/rust 的 rustc）
+          rm -rf kernel/prebuilts
           df -h /
 
       - name: 放入设备树并应用补丁
