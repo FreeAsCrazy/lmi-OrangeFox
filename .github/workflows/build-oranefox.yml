@@ -55,6 +55,49 @@ jobs:
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
           repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
             -b ${{ github.event.inputs.fox_branch }}
+          # 排除不需要的项目（省磁盘）
+          mkdir -p .repo/local_manifests
+          {
+            echo '<manifest>'
+            echo '  <remove-project name="platform/cts" />'
+            echo '  <remove-project name="platform/developers/build" />'
+            echo '  <remove-project name="platform/developers/samples/android" />'
+            echo '  <remove-project name="device/generic/arm64" />'
+            echo '  <remove-project name="device/generic/armv7-a-neon" />'
+            echo '  <remove-project name="device/generic/art" />'
+            echo '  <remove-project name="device/generic/car" />'
+            echo '  <remove-project name="device/generic/common" />'
+            echo '  <remove-project name="device/generic/goldfish" />'
+            echo '  <remove-project name="device/generic/goldfish-opengl" />'
+            echo '  <remove-project name="device/generic/trusty" />'
+            echo '  <remove-project name="device/generic/x86" />'
+            echo '  <remove-project name="device/generic/x86_64" />'
+            echo '  <remove-project name="device/google/atv" />'
+            echo '  <remove-project name="device/google/contexthub" />'
+            echo '  <remove-project name="device/google/common/etm" />'
+            echo '  <remove-project name="device/google/cuttlefish" />'
+            echo '  <remove-project name="device/google/cuttlefish_prebuilts" />'
+            echo '  <remove-project name="device/google/cuttlefish_vmm" />'
+            echo '  <remove-project name="device/google/trout" />'
+            echo '  <remove-project name="platform/sdk" />'
+            echo '  <remove-project name="platform/test/dittosuite" />'
+            echo '  <remove-project name="platform/test/robolectric-extensions" />'
+            echo '  <remove-project name="platform/test/mlts/benchmark" />'
+            echo '  <remove-project name="platform/test/mlts/models" />'
+            echo '  <remove-project name="platform/test/app_compat/csuite" />'
+            echo '  <remove-project name="platform/test/cts-root" />'
+            echo '  <remove-project name="platform/test/mts" />'
+            echo '  <remove-project name="platform/test/suite_harness" />'
+            echo '  <remove-project name="platform/test/vts" />'
+            echo '  <remove-project name="platform/test/vts-testcase/hal" />'
+            echo '  <remove-project name="platform/test/vts-testcase/kernel" />'
+            echo '  <remove-project name="platform/test/vts-testcase/nbu" />'
+            echo '  <remove-project name="platform/test/vts-testcase/performance" />'
+            echo '  <remove-project name="platform/test/vts-testcase/security" />'
+            echo '  <remove-project name="platform/test/vts-testcase/vndk" />'
+            echo '  <remove-project name="platform/test/catbox" />'
+            echo '</manifest>'
+          } > .repo/local_manifests/remove.xml
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
