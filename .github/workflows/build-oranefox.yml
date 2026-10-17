@@ -1,0 +1,131 @@
+name: 编译 OrangeFox Recovery - lmi
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_branch:
+        description: 'Manifest 分支'
+        required: true
+        default: 'twrp-14.1'
+
+concurrency:
+  group: oranefox-lmi-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检查并释放磁盘空间
+        run: |
+          df -h /
+          sudo bash -c 'rm -rf /usr/share/dotnet & rm -rf /usr/local/lib/android & rm -rf /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL & wait'
+          df -h /
+
+      - name: 安装依赖
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          PKGS="git-core gnupg flex bison build-essential zip curl zlib1g-dev \
+            libc6-dev-i386 libncurses5 libncurses5-dev x11proto-core-dev libx11-dev \
+            libgl1-mesa-dev libxml2-utils xsltproc fontconfig python3 python3-pip \
+            openjdk-17-jdk git-lfs bc g++-multilib gcc-multilib libssl-dev libelf-dev ccache"
+          sudo -E apt-get install -yq --no-install-recommends $PKGS || {
+            sudo apt-get update
+            sudo -E apt-get install -yq --no-install-recommends $PKGS
+          }
+          sudo apt-get clean
+
+      - name: 初始化 repo
+        run: |
+          mkdir -p ~/bin
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          chmod a+x ~/bin/repo
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+
+      - name: 同步 TWRP 源码
+        run: |
+          export PATH=~/bin:$PATH
+          mkdir -p workspace && cd workspace
+          repo init -u https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp.git \
+            -b ${{ github.event.inputs.manifest_branch }} --depth=1
+          success=false
+          for i in 1 2 3 4 5; do
+            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
+              success=true
+              break
+            fi
+            echo "=== 第 $i 次 repo sync 失败，15 秒后重试 ==="
+            sleep 15
+          done
+          [ "$success" = true ]
+          rm -rf .repo
+          df -h /
+
+      - name: 复制设备树并应用补丁
+        run: |
+          cd workspace
+          mkdir -p device/xiaomi
+          cp -r /home/runner/work/lmi-twrp/lmi-twrp/device_xiaomi_lmi-TWRP device/xiaomi/lmi
+          # 加密自动检测
+          sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
+          # 去掉 Magisk 集成
+          sed -i '/OF_USE_MAGISKBOOT/d' device/xiaomi/lmi/vendorsetup.sh
+          sed -i '/OF_USE_MAGISKBOOT_FOR_ALL_PATCHES/d' device/xiaomi/lmi/vendorsetup.sh
+          sed -i '/FOX_USE_SPECIFIC_MAGISK_ZIP/d' device/xiaomi/lmi/vendorsetup.sh
+          # 基于原始 vendorsetup.sh 修改（设备树已包含）
+          VENDORSU="device/xiaomi/lmi/vendorsetup.sh"
+          # 去掉 Magisk 集成
+          sed -i '/OF_USE_MAGISKBOOT/d; /OF_USE_MAGISKBOOT_FOR_ALL_PATCHES/d; /FOX_USE_SPECIFIC_MAGISK_ZIP/d' "$VENDORSU"
+          # 默认简体中文
+          sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' "$VENDORSU"
+
+      - name: 编译 Recovery
+        run: |
+          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 16G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=16384; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
+          free -h
+          df -h /
+          cd workspace
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          export SKIP_ABI_CHECKS=true
+          export USE_CCACHE=1
+          export CCACHE_DIR=$PWD/out/ccache
+          export CCACHE_EXEC=$(which ccache)
+          ccache -M 8G
+          lunch twrp_lmi-eng
+          mka recoveryimage -j$(($(nproc) * 2))
+
+      - name: 复制产物并重命名
+        run: |
+          cd workspace
+          mkdir -p output
+          cp out/target/product/lmi/recovery.img output/recovery.img
+          echo "=== 产物信息 ==="
+          ls -lh output/recovery.img
+          file output/recovery.img
+          md5sum output/recovery.img
+
+      - name: 上传 Recovery 镜像
+        uses: actions/upload-artifact@v4
+        with:
+          name: oranefox-recovery-lmi
+          path: output/recovery.img
+          retention-days: 30
+
+      - name: 创建 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: oranefox-lmi-${{ github.run_number }}
+          name: OrangeFox Recovery for lmi #${{ github.run_number }}
+          body: |
+            自动编译的 OrangeFox Recovery
+            设备: lmi
+            分支: ${{ github.event.inputs.manifest_branch }}
+          files: output/recovery.img
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
