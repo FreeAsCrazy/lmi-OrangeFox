@@ -149,7 +149,7 @@ jobs:
 
       - name: 编译 Recovery
         run: |
-          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 16G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=16384; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
+          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 8G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=8192; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
           free -h
           df -h /
           cd /home/runner/fox_build
