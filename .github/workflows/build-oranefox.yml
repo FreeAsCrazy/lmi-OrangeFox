@@ -68,7 +68,7 @@ jobs:
               device/google/common/etm device/google/cuttlefish \
               device/google/cuttlefish_prebuilts device/google/cuttlefish_vmm \
               device/google/trout sdk test/dittosuite test/robolectric-extensions \
-              test/mlts/benchmark test/mlts/models test/app_compat/csuite test/cts-root \
+              test/mlts/benchmark test/mlts/models test/cts-root \
               test/mts test/suite_harness test/vts test/vts-testcase/hal \
               test/vts-testcase/kernel test/vts-testcase/nbu test/vts-testcase/performance \
               test/vts-testcase/security test/vts-testcase/vndk test/catbox; do
@@ -131,6 +131,9 @@ jobs:
           sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
           sed -i 's/PRODUCT_TARGET_VNDK_VERSION := 31/PRODUCT_TARGET_VNDK_VERSION := 36/' device/xiaomi/lmi/device.mk
 
+          # A16 lunch 必须三段式，release 用 bp2a（aosp_current 的目标，trunk_staging 在 A16 不存在）
+          sed -i 's/twrp_lmi-eng/twrp_lmi-bp2a-eng/' device/xiaomi/lmi/AndroidProducts.mk
+
           # 让 manifest 提供 twrp-common（避免拉 12.1 版本冲突）
           rm -f device/xiaomi/lmi/twrp.dependencies
 
@@ -150,8 +153,7 @@ jobs:
           export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
           export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
           export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
-          lunch twrp_lmi-eng \
-            || lunch twrp_lmi-trunk_staging-eng \
+          lunch twrp_lmi-bp2a-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
           mka recoveryimage -j$(($(nproc) * 2))
