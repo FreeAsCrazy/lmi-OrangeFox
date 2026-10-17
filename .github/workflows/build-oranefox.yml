@@ -55,49 +55,30 @@ jobs:
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
           repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
             -b ${{ github.event.inputs.fox_branch }}
-          # 排除不需要的项目（省磁盘）
+          # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
+          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
+          repo manifest -o "$RUNNER_TEMP/manifest.xml"
           mkdir -p .repo/local_manifests
           {
             echo '<manifest>'
-            echo '  <remove-project name="platform/cts" />'
-            echo '  <remove-project name="platform/developers/build" />'
-            echo '  <remove-project name="platform/developers/samples/android" />'
-            echo '  <remove-project name="device/generic/arm64" />'
-            echo '  <remove-project name="device/generic/armv7-a-neon" />'
-            echo '  <remove-project name="device/generic/art" />'
-            echo '  <remove-project name="device/generic/car" />'
-            echo '  <remove-project name="device/generic/common" />'
-            echo '  <remove-project name="device/generic/goldfish" />'
-            echo '  <remove-project name="device/generic/goldfish-opengl" />'
-            echo '  <remove-project name="device/generic/trusty" />'
-            echo '  <remove-project name="device/generic/x86" />'
-            echo '  <remove-project name="device/generic/x86_64" />'
-            echo '  <remove-project name="device/google/atv" />'
-            echo '  <remove-project name="device/google/contexthub" />'
-            echo '  <remove-project name="device/google/common/etm" />'
-            echo '  <remove-project name="device/google/cuttlefish" />'
-            echo '  <remove-project name="device/google/cuttlefish_prebuilts" />'
-            echo '  <remove-project name="device/google/cuttlefish_vmm" />'
-            echo '  <remove-project name="device/google/trout" />'
-            echo '  <remove-project name="platform/sdk" />'
-            echo '  <remove-project name="platform/test/dittosuite" />'
-            echo '  <remove-project name="platform/test/robolectric-extensions" />'
-            echo '  <remove-project name="platform/test/mlts/benchmark" />'
-            echo '  <remove-project name="platform/test/mlts/models" />'
-            echo '  <remove-project name="platform/test/app_compat/csuite" />'
-            echo '  <remove-project name="platform/test/cts-root" />'
-            echo '  <remove-project name="platform/test/mts" />'
-            echo '  <remove-project name="platform/test/suite_harness" />'
-            echo '  <remove-project name="platform/test/vts" />'
-            echo '  <remove-project name="platform/test/vts-testcase/hal" />'
-            echo '  <remove-project name="platform/test/vts-testcase/kernel" />'
-            echo '  <remove-project name="platform/test/vts-testcase/nbu" />'
-            echo '  <remove-project name="platform/test/vts-testcase/performance" />'
-            echo '  <remove-project name="platform/test/vts-testcase/security" />'
-            echo '  <remove-project name="platform/test/vts-testcase/vndk" />'
-            echo '  <remove-project name="platform/test/catbox" />'
+            for p in cts developers/build developers/samples/android \
+              device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
+              device/generic/car device/generic/common device/generic/goldfish \
+              device/generic/goldfish-opengl device/generic/trusty device/generic/x86 \
+              device/generic/x86_64 device/google/atv device/google/contexthub \
+              device/google/common/etm device/google/cuttlefish \
+              device/google/cuttlefish_prebuilts device/google/cuttlefish_vmm \
+              device/google/trout sdk test/dittosuite test/robolectric-extensions \
+              test/mlts/benchmark test/mlts/models test/app_compat/csuite test/cts-root \
+              test/mts test/suite_harness test/vts test/vts-testcase/hal \
+              test/vts-testcase/kernel test/vts-testcase/nbu test/vts-testcase/performance \
+              test/vts-testcase/security test/vts-testcase/vndk test/catbox; do
+              grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
+                echo "  <remove-project path=\"$p\" />"
+            done
             echo '</manifest>'
           } > .repo/local_manifests/remove.xml
+          cat .repo/local_manifests/remove.xml
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
@@ -174,16 +155,7 @@ jobs:
             || lunch twrp_lmi-trunk_staging-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
-          set -o pipefail
-          mka recoveryimage -j$(($(nproc) * 2)) 2>&1 | tee /home/runner/output/build.log
-
-      - name: 上传编译日志（失败时）
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-failure-log
-          path: /home/runner/output/build.log
-          retention-days: 7
+          mka recoveryimage -j$(($(nproc) * 2))
 
       - name: 复制产物
         run: |
