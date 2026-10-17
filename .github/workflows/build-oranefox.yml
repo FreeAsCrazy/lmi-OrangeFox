@@ -87,6 +87,23 @@ jobs:
           # 默认简体中文
           sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
 
+          # 减少编译量
+          grep -q 'TW_USE_TOOLBOX := false' device/xiaomi/lmi/BoardConfig.mk || \
+            echo 'TW_USE_TOOLBOX := false' >> device/xiaomi/lmi/BoardConfig.mk
+
+          # openaes C23 原型问题
+          echo 'LOCAL_CFLAGS += -Wno-error=deprecated-non-prototype' >> bootable/recovery/openaes/Android.mk
+
+          # libtar 过时 ndk_platform 引用
+          sed -i 's/-ndk_platform/-ndk/g' \
+            bootable/recovery/Android.mk \
+            bootable/recovery/libtar/Android.mk
+
+          # 语言：简体中文覆盖默认 + 删除其他语言
+          cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
+             bootable/recovery/gui/theme/common/languages/en.xml
+          rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
+
       - name: 编译 Recovery
         run: |
           sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 16G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=16384; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
@@ -96,6 +113,12 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export SKIP_ABI_CHECKS=true
+          export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+          export LC_ALL=C
+          export FOX_BUGGED_AOSP_ARB_WORKAROUND="1588606644"
+          export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
+          export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
+          export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
           lunch twrp_lmi-eng || lunch twrp_lmi-trunk_staging-eng
           mka recoveryimage -j$(($(nproc) * 2))
 
