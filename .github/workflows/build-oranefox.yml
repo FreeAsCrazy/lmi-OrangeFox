@@ -4,9 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       fox_branch:
-        description: 'OrangeFox 分支（16.0 / 14.1 / 12.1）'
+        description: 'OrangeFox 分支'
         required: true
-        default: '16.0'
+        default: 'fox_16.0'
+        type: choice
+        options:
+          - fox_16.0
+          - fox_14.1
 
 concurrency:
   group: orangefox-lmi-build
@@ -20,7 +24,7 @@ jobs:
       contents: write
 
     steps:
-      - name: 检查并释放磁盘空间
+      - name: 释放磁盘空间
         run: |
           df -h /
           sudo bash -c 'rm -rf /usr/share/dotnet & rm -rf /usr/local/lib/android & rm -rf /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL & wait'
@@ -32,14 +36,14 @@ jobs:
           PKGS="git-core gnupg flex bison build-essential zip curl zlib1g-dev \
             libc6-dev-i386 libncurses5 libncurses5-dev x11proto-core-dev libx11-dev \
             libgl1-mesa-dev libxml2-utils xsltproc fontconfig python3 python3-pip \
-            openjdk-17-jdk git-lfs bc g++-multilib gcc-multilib libssl-dev libelf-dev ccache"
+            openjdk-17-jdk bc g++-multilib gcc-multilib libssl-dev libelf-dev"
           sudo -E apt-get install -yq --no-install-recommends $PKGS || {
             sudo apt-get update
             sudo -E apt-get install -yq --no-install-recommends $PKGS
           }
           sudo apt-get clean
 
-      - name: 初始化 repo 工具
+      - name: 初始化 repo 并同步源码
         run: |
           mkdir -p ~/bin
           curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
@@ -48,14 +52,20 @@ jobs:
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-      - name: 同步 OrangeFox 源码
-        run: |
-          export PATH=~/bin:$PATH
-          mkdir -p ~/OrangeFox_sync
-          cd ~/OrangeFox_sync
-          git clone --depth=1 https://gitlab.com/OrangeFox/sync.git
-          cd sync
-          ./orangefox_sync.sh --branch ${{ github.event.inputs.fox_branch }} --path /home/runner/fox_build
+          mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
+          repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
+            -b ${{ github.event.inputs.fox_branch }}
+          success=false
+          for i in 1 2 3 4 5; do
+            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
+              success=true
+              break
+            fi
+            echo "=== 第 $i 次 repo sync 失败，15 秒后重试 ==="
+            sleep 15
+          done
+          [ "$success" = true ]
+          rm -rf .repo
           df -h /
 
       - name: 放入设备树并应用补丁
@@ -86,38 +96,32 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export SKIP_ABI_CHECKS=true
-          export USE_CCACHE=1
-          export CCACHE_DIR=$PWD/out/ccache
-          export CCACHE_EXEC=$(which ccache)
-          ccache -M 8G
-          lunch twrp_lmi-eng
+          lunch twrp_lmi-eng || lunch twrp_lmi-trunk_staging-eng
           mka recoveryimage -j$(($(nproc) * 2))
 
       - name: 复制产物
         run: |
           cd /home/runner/fox_build
           mkdir -p /home/runner/output
-          cp out/target/product/lmi/recovery.img /home/runner/output/
-          echo "=== 产物信息 ==="
+          cp out/target/product/lmi/recovery.img /home/runner/output/recovery.img
           ls -lh /home/runner/output/recovery.img
           file /home/runner/output/recovery.img
           md5sum /home/runner/output/recovery.img
 
       - name: 生成文件名
-        id: name
         run: |
           VER=$(grep -oP 'FOX_VERSION\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
           [ -z "$VER" ] && VER="R12"
           OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
-          echo "output=$OUT" >> "$GITHUB_OUTPUT"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
+          echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
 
       - name: 上传 Recovery 镜像
         uses: actions/upload-artifact@v4
         with:
           name: orangefox-recovery-lmi
-          path: /home/runner/output/*.img
+          path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
       - name: 创建 Release
@@ -129,7 +133,7 @@ jobs:
             自动编译的 OrangeFox Recovery
             设备: lmi
             OrangeFox 分支: ${{ github.event.inputs.fox_branch }}
-            加密: FBEv2 自动检测
-          files: /home/runner/output/*.img
+            加密: 自动检测
+          files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
