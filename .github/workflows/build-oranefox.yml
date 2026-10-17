@@ -121,6 +121,21 @@ jobs:
           # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
           sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
 
+          # fox_16.0 废弃变量批量改名（语义等价，依据 orangefox.mk 的 obsolete 检查全清单一次改完，避免逐轮试错）
+          find device/xiaomi/lmi -type f \( -name '*.sh' -o -name '*.mk' \) -exec sed -i \
+            -e 's/\bOF_TARGET_DEVICES=/FOX_TARGET_DEVICES=/' \
+            -e 's/\bFOX_ADVANCED_SECURITY=/OF_ADVANCED_SECURITY=/' \
+            -e 's/\bFOX_USE_LZMA_COMPRESSION=/OF_USE_LZMA_COMPRESSION=/' \
+            -e 's/\bFOX_USE_LZ4_COMPRESSION=/OF_USE_LZ4_COMPRESSION=/' \
+            -e 's/\bFOX_USE_DMCTL=/OF_USE_DMCTL=/' \
+            -e 's/\bOF_AB_DEVICE=/FOX_AB_DEVICE=/' \
+            -e 's/\bOF_VIRTUAL_AB_DEVICE=/FOX_VIRTUAL_AB_DEVICE=/' \
+            -e 's/\bOF_VENDOR_BOOT_RECOVERY=/FOX_VENDOR_BOOT_RECOVERY=/' \
+            -e 's/\bOF_PATCH_VBMETA_FLAG=/FOX_PATCH_VBMETA_FLAG=/' \
+            -e 's/\bOF_VANILLA_BUILD=/FOX_VANILLA_BUILD=/' \
+            -e '/TW_INCLUDE_INJECTTWRP/d' \
+            {} +
+
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
