@@ -17,7 +17,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    # ubuntu-22.04 已进入退役倒计时（2027-04 停止支持），平台回收 22.04 容量导致 runner 被中途关停，换 24.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 360
     permissions:
       contents: write
