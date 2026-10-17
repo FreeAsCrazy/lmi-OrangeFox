@@ -117,6 +117,9 @@ jobs:
           cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
           cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
 
+          # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
+          sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
+
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
@@ -203,7 +206,7 @@ jobs:
 
       - name: 生成文件名
         run: |
-          VER=$(grep -oP 'FOX_VERSION\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
+          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
           [ -z "$VER" ] && VER="R12"
           OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
