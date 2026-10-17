@@ -70,7 +70,7 @@ jobs:
         run: |
           cd workspace
           mkdir -p device/xiaomi
-          cp -r /home/runner/work/lmi-twrp/lmi-twrp/device_xiaomi_lmi-TWRP device/xiaomi/lmi
+          cp -r ${{ github.workspace }}/device_xiaomi_lmi-TWRP device/xiaomi/lmi
           # 加密自动检测
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
           # 去掉 Magisk 集成
