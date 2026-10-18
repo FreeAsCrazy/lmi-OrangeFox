@@ -80,7 +80,7 @@ jobs:
 
           success=false
           for i in 1 2 3 4 5; do
-            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
+            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --optimized-fetch --retry-fetches=5; then
               success=true; break
             fi
             echo "=== 第 $i 次 sync 失败，15 秒后重试 ==="; sleep 15
