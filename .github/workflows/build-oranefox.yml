@@ -118,6 +118,10 @@ jobs:
           cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
           cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
 
+          # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON（merge_json 报 line40 RecoveryPixelFormat 缺逗号）
+          sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
+          grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' device/xiaomi/lmi/BoardConfig.mk
+
           # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
           sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
 
@@ -232,7 +236,13 @@ jobs:
           lunch twrp_lmi-bp2a-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
-          mka recoveryimage -j$(($(nproc) * 2))
+          mka recoveryimage -j$(($(nproc) * 2)) || {
+            echo '===== extra.variables 前 45 行（定位 JSON 坏行）:'
+            sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1
+            echo '===== json 精确报错:'
+            python3 -c "import json;json.load(open('out/soong/soong.twrp_lmi.extra.variables'))" 2>&1 | tail -3
+            exit 1
+          }
 
       - name: 复制产物
         run: |
