@@ -48,6 +48,14 @@ jobs:
           sudo dpkg -i "libtinfo5_${N}_amd64.deb" "libncurses5_${N}_amd64.deb"
           sudo apt-get clean
 
+      - name: 恢复编译缓存 (ccache)
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ccache-${{ github.run_id }}
+          restore-keys: |
+            ccache-
+
       - name: 初始化 repo 并同步源码
         run: |
           mkdir -p ~/bin
@@ -121,6 +129,10 @@ jobs:
           # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON（merge_json 报 line40 RecoveryPixelFormat 缺逗号）
           sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
           grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' device/xiaomi/lmi/BoardConfig.mk
+
+          # A16 对预编译 ELF 强制 16KB 页对齐检查，TWRP 老 magiskboot(4K) 被杀；lmi 是 4KB page 内核，全局豁免（检查器官方 device mk 开关）
+          echo 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' >> device/xiaomi/lmi/device.mk
+          grep -q 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' device/xiaomi/lmi/device.mk
 
           # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
           sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
@@ -233,16 +245,27 @@ jobs:
           export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
           export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
           export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
+          # ccache 加速：跨 run 复用编译缓存（restore-keys 回源最近一轮），二轮起省 30-50%
+          command -v ccache || sudo apt-get install -y ccache
+          export USE_CCACHE=1
+          export CCACHE_DIR="$HOME/.ccache"
+          export CCACHE_EXEC="$(command -v ccache)"
+          ccache -M 7G
+          ccache -o compression=true
+          ccache -z
           lunch twrp_lmi-bp2a-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
-          mka recoveryimage -j$(($(nproc) * 2)) || {
+          RC=0
+          mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
+          ccache -s || true
+          if [ "$RC" -ne 0 ]; then
             echo '===== extra.variables 前 45 行（定位 JSON 坏行）:'
             sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1
             echo '===== json 精确报错:'
             python3 -c "import json;json.load(open('out/soong/soong.twrp_lmi.extra.variables'))" 2>&1 | tail -3
-            exit 1
-          }
+            exit "$RC"
+          fi
 
       - name: 复制产物
         run: |
