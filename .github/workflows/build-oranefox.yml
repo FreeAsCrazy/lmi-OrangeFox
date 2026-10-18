@@ -184,8 +184,9 @@ jobs:
             -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
             -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
 
-          # 默认简体中文
-          sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
+          # [2026-10-18] 中文默认已移除：恢复 OrangeFox 默认（设备树无 TW_DEFAULT_LANGUAGE，sed 无实际效果）
+          # 如需恢复中文默认，取消下方注释：
+          # sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
 
           # 减少编译量
           grep -q 'TW_USE_TOOLBOX := false' device/xiaomi/lmi/BoardConfig.mk || \
@@ -199,10 +200,11 @@ jobs:
             bootable/recovery/Android.mk \
             bootable/recovery/libtar/Android.mk
 
-          # 语言：简体中文覆盖默认 + 删除其他语言
-          cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
-             bootable/recovery/gui/theme/common/languages/en.xml
-          rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
+          # [2026-10-18] 中文语言覆盖已移除：en.xml 恢复 OrangeFox 原始英文，extra-languages 全保留
+          # 如需恢复中文界面，取消下方注释：
+          # cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
+          #    bootable/recovery/gui/theme/common/languages/en.xml
+          # rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
 
           # A16 API 适配
           sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
