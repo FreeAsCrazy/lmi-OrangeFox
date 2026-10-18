@@ -68,9 +68,11 @@ jobs:
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
           repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
             -b ${{ github.event.inputs.fox_branch }}
-          # 瘦身：白名单过滤 manifest（1018 → 263 项目，砍 74%）。
+          # 瘦身：按白名单生成 remove-project（1018 → 263 项目，砍 74%）。
           # 白名单来自 Run #27 日志的 soong 模块引用图（//path:module = 实际参与编译的项目）
           # + 保守保留组（prebuilts 工具链 / device / build / vendor / art 系）。
+          # 走 local_manifests 移除，不直接改 manifests/*.xml：从「repo manifest -o 展开清单」
+          # 反向挑白名单外项目，目标必然存在 → 不会 remove 悬空，也不会 duplicate。
           curl -fsSL --connect-timeout 8 --max-time 30 --retry 2 \
             "https://gh-proxy.com/https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
             -o "$RUNNER_TEMP/keep.txt" \
@@ -78,46 +80,25 @@ jobs:
             "https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
             -o "$RUNNER_TEMP/keep.txt"
           wc -l "$RUNNER_TEMP/keep.txt"
-          python3 - "$RUNNER_TEMP/keep.txt" <<'PYEOF'
+          repo manifest -o "$RUNNER_TEMP/manifest.xml"
+          python3 - "$RUNNER_TEMP/keep.txt" "$RUNNER_TEMP/manifest.xml" > "$RUNNER_TEMP/slim.xml" <<'PYEOF'
           import re, sys
           keep = {l.strip() for l in open(sys.argv[1]) if l.strip()}
-          files = ('.repo/manifests/default.xml', '.repo/manifests/twrp-default.xml')
-          # 阶段1：收集过滤后仍存在的项目（name/path），供 remove-project 判定
-          kept_names, kept_paths = set(), set()
-          for f in files:
-              for ln in open(f):
-                  m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
-                  if m and m.group(1) in keep:
-                      kept_paths.add(m.group(1))
-                      nm = re.search(r'\bname="([^"]+)"', ln)
-                      if nm:
-                          kept_names.add(nm.group(1))
-          # 阶段2：过滤 project；remove-project 仅在目标仍存在时保留（否则 duplicate 或悬空）
-          for f in files:
-              out, skip = [], False
-              for ln in open(f).read().split('\n'):
-                  m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
-                  if m:
-                      if m.group(1) in keep:
-                          out.append(ln); skip = False
-                      else:
-                          skip = '/>' not in ln  # 非自闭合则连子元素（copyfile/linkfile）一起跳过
-                      continue
-                  if skip:
-                      if '</project>' in ln:
-                          skip = False
-                      continue
-                  rm = re.search(r'<remove-project\b[^>]*\b(name|path)="([^"]+)"', ln)
-                  if rm:
-                      still = (rm.group(2) in kept_names) if rm.group(1) == 'name' else (rm.group(2) in kept_paths)
-                      if still:
-                          out.append(ln)
-                      continue
-                  out.append(ln)
-              open(f, 'w').write('\n'.join(out))
-              print(f, '过滤后项目数:', len(re.findall(r'<project\b', '\n'.join(out))),
-                    '| remove-project:', len(re.findall(r'<remove-project', '\n'.join(out))))
+          out, seen = ['<manifest>'], set()
+          for ln in open(sys.argv[2]):
+              m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
+              if not m or m.group(1) in keep:
+                  continue
+              nm = re.search(r'\bname="([^"]+)"', ln)
+              if nm and nm.group(1) not in seen:
+                  seen.add(nm.group(1))
+                  out.append(f'  <remove-project name="{nm.group(1)}" />')
+          out.append('</manifest>')
+          print('\n'.join(out))
           PYEOF
+          mkdir -p .repo/local_manifests
+          cp "$RUNNER_TEMP/slim.xml" .repo/local_manifests/slim.xml
+          echo "slim: remove 项目数 = $(grep -c remove-project "$RUNNER_TEMP/slim.xml")"
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
