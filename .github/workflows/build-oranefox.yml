@@ -1,4 +1,4 @@
-name: 编译 OrangeFox Recovery - lmi (A16)
+name: 编译 TWRP Recovery - lmi (A12.1)
 
 on:
   workflow_dispatch:
@@ -67,14 +67,15 @@ jobs:
           git config --global user.email "actions@github.com"
 
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
-          repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
-            -b ${{ github.event.inputs.fox_branch }}
+          # TWRP 构建：AOSP A12.1 manifest + TeamWin recovery/vendor（覆盖 AOSP 的 bootable/recovery）
+          repo init --depth=1 -u https://github.com/aosp-mirror/platform_manifest \
+            -b android-12.1.0_r27
           # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
-          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
           repo manifest -o "$RUNNER_TEMP/manifest.xml"
           mkdir -p .repo/local_manifests
           {
             echo '<manifest>'
+            echo '  <remote name="github" fetch="https://github.com" />'
             for p in cts developers/build developers/samples/android \
               device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
               device/generic/car device/generic/common device/generic/goldfish \
@@ -90,9 +91,13 @@ jobs:
               grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
                 echo "  <remove-project path=\"$p\" />"
             done
+            # TWRP 组件：移除 AOSP 的 bootable/recovery，换 TeamWin 的实现
+            echo '  <remove-project name="platform/bootable/recovery" />'
+            echo '  <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-12.1" />'
+            echo '  <project path="vendor/twrp" name="TeamWin/android_vendor_twrp" remote="github" revision="android-12.1" />'
             echo '</manifest>'
-          } > .repo/local_manifests/remove.xml
-          cat .repo/local_manifests/remove.xml
+          } > .repo/local_manifests/twrp.xml
+          cat .repo/local_manifests/twrp.xml
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
@@ -257,9 +262,9 @@ jobs:
           ccache -M 7G
           ccache -o compression=true
           ccache -z
-          lunch twrp_lmi-bp2a-eng \
-            || lunch twrp_lmi-ap3a-eng \
-            || lunch twrp_lmi-ap2a-eng
+          lunch twrp_lmi-eng \
+            || lunch twrp_lmi-userdebug \
+            || lunch twrp_lmi
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
@@ -282,9 +287,8 @@ jobs:
 
       - name: 生成文件名
         run: |
-          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
-          [ -z "$VER" ] && VER="R12"
-          OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
+          # TWRP 3.7.1（android-12.1 分支）
+          OUT="TWRP-3.7.1-lmi-$(date +%Y%m%d%H%M).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
@@ -292,20 +296,20 @@ jobs:
       - name: 上传 Recovery 镜像
         uses: actions/upload-artifact@v4
         with:
-          name: orangefox-recovery-lmi
+          name: twrp-recovery-lmi
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: orangefox-lmi-${{ github.run_number }}
-          name: OrangeFox Recovery for lmi (${{ github.run_number }})
+          tag_name: twrp-lmi-${{ github.run_number }}
+          name: TWRP 3.7.1 for lmi (${{ github.run_number }})
           body: |
-            自动编译的 OrangeFox Recovery
+            自动编译的 TWRP 3.7.1 Recovery（android-12.1 分支）
             设备: lmi
-            OrangeFox 分支: ${{ github.event.inputs.fox_branch }}
-            加密: 自动检测
+            基础: AOSP android-12.1.0_r27 + TeamWin recovery/vendor
+            加密: FBE v2
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
