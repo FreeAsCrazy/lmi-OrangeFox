@@ -95,6 +95,8 @@ jobs:
                       if '</project>' in ln:
                           skip = False
                       continue
+                  if '<remove-project' in ln:
+                      continue  # 过滤后 manifest 即白名单，残留 remove-project 会因目标已被删而报错
                   out.append(ln)
               open(f, 'w').write('\n'.join(out))
               print(f, '过滤后项目数:', len(re.findall(r'<project\b', '\n'.join(out))))
