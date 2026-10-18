@@ -68,30 +68,37 @@ jobs:
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
           repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
             -b ${{ github.event.inputs.fox_branch }}
-          # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
-          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
-          repo manifest -o "$RUNNER_TEMP/manifest.xml"
-          mkdir -p .repo/local_manifests
-          {
-            echo '<manifest>'
-            for p in cts developers/build developers/samples/android \
-              device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
-              device/generic/car device/generic/common device/generic/goldfish \
-              device/generic/goldfish-opengl device/generic/trusty device/generic/x86 \
-              device/generic/x86_64 device/google/atv device/google/contexthub \
-              device/google/common/etm device/google/cuttlefish \
-              device/google/cuttlefish_prebuilts device/google/cuttlefish_vmm \
-              device/google/trout sdk test/dittosuite test/robolectric-extensions \
-              test/mlts/benchmark test/mlts/models test/cts-root \
-              test/mts test/suite_harness test/vts test/vts-testcase/hal \
-              test/vts-testcase/kernel test/vts-testcase/nbu test/vts-testcase/performance \
-              test/vts-testcase/security test/vts-testcase/vndk test/catbox; do
-              grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
-                echo "  <remove-project path=\"$p\" />"
-            done
-            echo '</manifest>'
-          } > .repo/local_manifests/remove.xml
-          cat .repo/local_manifests/remove.xml
+          # 瘦身：白名单过滤 manifest（1018 → 263 项目，砍 74%）。
+          # 白名单来自 Run #27 日志的 soong 模块引用图（//path:module = 实际参与编译的项目）
+          # + 保守保留组（prebuilts 工具链 / device / build / vendor / art 系）。
+          curl -fsSL --connect-timeout 8 --max-time 30 --retry 2 \
+            "https://gh-proxy.com/https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
+            -o "$RUNNER_TEMP/keep.txt" \
+            || curl -fsSL --connect-timeout 8 --max-time 30 --retry 2 \
+            "https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
+            -o "$RUNNER_TEMP/keep.txt"
+          wc -l "$RUNNER_TEMP/keep.txt"
+          python3 - "$RUNNER_TEMP/keep.txt" <<'PYEOF'
+          import re, sys
+          keep = {l.strip() for l in open(sys.argv[1]) if l.strip()}
+          for f in ('.repo/manifests/default.xml', '.repo/manifests/twrp-default.xml'):
+              out, skip = [], False
+              for ln in open(f).read().split('\n'):
+                  m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
+                  if m:
+                      if m.group(1) in keep:
+                          out.append(ln); skip = False
+                      else:
+                          skip = '/>' not in ln  # 非自闭合则连子元素（copyfile/linkfile）一起跳过
+                      continue
+                  if skip:
+                      if '</project>' in ln:
+                          skip = False
+                      continue
+                  out.append(ln)
+              open(f, 'w').write('\n'.join(out))
+              print(f, '过滤后项目数:', len(re.findall(r'<project\b', '\n'.join(out))))
+          PYEOF
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
@@ -103,6 +110,8 @@ jobs:
           done
           [ "$success" = true ]
           rm -rf .repo
+          # 编译不需要 git 元数据，删各项目 .git 释放磁盘（depth=1 也有 1-3GB）
+          find . -name .git -prune -exec rm -rf {} + 2>/dev/null || true
           # GKI 内核 prebuilts 与 recovery 无关，其 Android.bp 加大 soong 分析内存，删除
           # （rust/NDK 不可删：A16 bionic libc 的 librustlibs.a 硬依赖 prebuilts/rust 的 rustc）
           rm -rf kernel/prebuilts
@@ -256,9 +265,26 @@ jobs:
           lunch twrp_lmi-bp2a-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
+          # dump 脚本落文件（heredoc 必须在步骤顶层：函数内嵌会因缩进破坏 bash heredoc）
+          cat > "$RUNNER_TEMP/dump_closure.py" <<'PYEOF'
+          import json
+          mi = json.load(open('out/soong/module-info.json'))
+          seen, stack = set(), ['recoveryimage']
+          while stack:
+              m = stack.pop()
+              if m in seen or m not in mi:
+                  continue
+              seen.add(m)
+              stack.extend(mi[m].get('dependencies', []))
+          paths = sorted({p for m in seen for p in mi[m].get('path', []) if p})
+          print(f'===== 依赖闭包: {len(seen)} 模块 / {len(paths)} 项目路径（含 header-only，用于更新白名单）:')
+          print('\n'.join(paths))
+          PYEOF
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
+          # 成败都 dump 依赖闭包（白名单下一轮按此精确更新，含 header-only 项目）
+          [ -f out/soong/module-info.json ] && { python3 "$RUNNER_TEMP/dump_closure.py" || true; }
           if [ "$RC" -ne 0 ]; then
             echo '===== extra.variables 前 45 行（定位 JSON 坏行）:'
             sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1
@@ -280,7 +306,7 @@ jobs:
         run: |
           VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
           [ -z "$VER" ] && VER="R12"
-          OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
+          OUT="OrangeFox-${VER}-A16-$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
