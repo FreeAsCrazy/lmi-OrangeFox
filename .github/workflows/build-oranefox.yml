@@ -142,6 +142,16 @@ jobs:
           sed -i 's/device-tests vts tvts art-host-tests/device-tests art-host-tests/' build/make/core/main.mk
           grep -q 'general-tests device-tests art-host-tests host-unit-tests' build/make/core/main.mk
 
+          # libvts_vintf_test_common 定义在被排除的 test/vts-testcase/hal 里，但 assemble_vintf 硬依赖它；
+          # 其依赖仅 libbase/libvintf（均在树内），只从 googlesource 补该模块 3 个小文件，不整仓恢复
+          VLIB=test/vts-testcase/hal/treble/vintf/libvts_vintf_test_common
+          VURL=https://android.googlesource.com/platform/test/vts-testcase/hal/+/master/treble/vintf/libvts_vintf_test_common
+          mkdir -p "$VLIB/include/libvts_vintf_test_common"
+          curl -fsSL --retry 3 "$VURL/Android.bp?format=TEXT" | base64 -d > "$VLIB/Android.bp"
+          curl -fsSL --retry 3 "$VURL/common.cpp?format=TEXT" | base64 -d > "$VLIB/common.cpp"
+          curl -fsSL --retry 3 "$VURL/include/libvts_vintf_test_common/common.h?format=TEXT" | base64 -d > "$VLIB/include/libvts_vintf_test_common/common.h"
+          grep -q 'name: "libvts_vintf_test_common"' "$VLIB/Android.bp" && [ -s "$VLIB/common.cpp" ]
+
           # openaes 是 K&R 旧式 C 代码：gnu99 保证可解析，再关掉 deprecated-non-prototype 的警告升级（AOSP 全局 -Werror）
           sed -i \
             -e 's/LOCAL_CFLAGS:= -g -c -W/LOCAL_CFLAGS:= -g -c -W -std=gnu99 -Wno-deprecated-non-prototype -Wno-error=deprecated-non-prototype/' \
