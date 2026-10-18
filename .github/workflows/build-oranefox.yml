@@ -179,10 +179,11 @@ jobs:
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
-          # 去掉 Magisk 集成（只删 export 语句，模式加 export 前缀避免误删 if 行导致语法错误）
-          sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
-            -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
-            -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
+          # [2026-10-18] Magisk 集成删除已还原：设备树原始 magisk 设置生效（OF_USE_MAGISKBOOT=1 + FOX_USE_SPECIFIC_MAGISK_ZIP 下载打包）
+          # 如需恢复删除 Magisk 集成，取消下方注释：
+          # sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
+          #   -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
+          #   -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
 
           # [2026-10-18] 中文默认已移除：恢复 OrangeFox 默认（设备树无 TW_DEFAULT_LANGUAGE，sed 无实际效果）
           # 如需恢复中文默认，取消下方注释：
