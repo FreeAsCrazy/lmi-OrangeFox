@@ -304,8 +304,11 @@ jobs:
 
       - name: 生成文件名
         run: |
-          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
-          [ -z "$VER" ] && VER="R12"
+          # 橙狐真版本取 build 系统自己生成的产物名（OrangeFox-R12.0_3-Beta-lmi.img）
+          # → R12.0_3 = 橙狐版本 R12.0 + 维护者补丁号 3；vendorsetup 里的值只是补丁号，不是版本号
+          SRC=$(ls /home/runner/fox_build/out/target/product/lmi/OrangeFox-*.img 2>/dev/null | head -1)
+          VER=$(basename "$SRC" 2>/dev/null | sed -E 's/^OrangeFox-//; s/-lmi\.img$//; s/-[A-Za-z]+$//')
+          [ -z "$VER" ] && VER="R12.0"
           OUT="OrangeFox-${VER}-A16-$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
