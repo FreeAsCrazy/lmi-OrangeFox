@@ -94,30 +94,20 @@ jobs:
           done
           df -h /
 
-      # ---------- 设备树（crDroid A16 + ScribeSavant TWRP 配置） ----------
+      # ---------- 设备树（纯 crDroid A16，不合并任何 TWRP 配置） ----------
       - name: 5. 放入设备树
         run: |
           cd /home/runner/build
           mkdir -p device/xiaomi
-          # 5a. crDroid A16 ROM 设备树（最新）
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          # 5b. ScribeSavant 的 TWRP 专用配置
-          git clone --depth=1 -b fox-12.1 \
-            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git /tmp/sav
-          # 5c. 合并 TWRP recovery 配置
-          cp -r /tmp/sav/recovery device/xiaomi/lmi/
-          cp /tmp/sav/twrp_lmi.mk device/xiaomi/lmi/
-          cp -r /tmp/sav/prebuilt device/xiaomi/lmi/
-          # 5d. 删除不兼容的 vendorsetup（crDroid 的旧格式会让 fox_16.0 envsetup 崩溃）
-          rm -f device/xiaomi/lmi/vendorsetup.sh
-          # 5e. product 注册
-          cat /tmp/sav/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
-          # 5f. TWRP 的 BoardConfig 段（TW_*、recovery 分区）
-          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sav/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
-          # 5g. TWRP 依赖
-          cp /tmp/sav/twrp.dependencies device/xiaomi/lmi/ 2>/dev/null || true
+          echo "=== 设备树结构："
+          ls device/xiaomi/lmi | head -20
+          echo "=== AndroidProducts.mk："
+          cat device/xiaomi/lmi/AndroidProducts.mk
+          echo "=== 是否有 twrp product："
+          grep -i 'twrp' device/xiaomi/lmi/AndroidProducts.mk || echo "（无 twrp product）"
           # 5h. 验证
           echo "=== 设备树合并检查："
           for f in twrp_lmi.mk prebuilt/Image.gz-dtb AndroidProducts.mk BoardConfig.mk; do
