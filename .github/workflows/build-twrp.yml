@@ -1,10 +1,18 @@
-name: 编译 TWRP Recovery - lmi (A12.1)
+name: 编译 OrangeFox Recovery - lmi (A16)
 
 on:
   workflow_dispatch:
+    inputs:
+      fox_branch:
+        description: 'OrangeFox 分支'
+        required: true
+        default: 'fox_16.0'
+        type: choice
+        options:
+          - fox_16.0
 
 concurrency:
-  group: twrp-lmi-build
+  group: orangefox-lmi-build
   cancel-in-progress: true
 
 jobs:
@@ -58,15 +66,14 @@ jobs:
           git config --global user.email "actions@github.com"
 
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
-          # TWRP 构建：AOSP A12.1 manifest + TeamWin recovery/vendor（覆盖 AOSP 的 bootable/recovery）
-          repo init --depth=1 -u https://github.com/aosp-mirror/platform_manifest \
-            -b android-12.1.0_r27
+          repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
+            -b ${{ github.event.inputs.fox_branch }}
           # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
+          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
           repo manifest -o "$RUNNER_TEMP/manifest.xml"
           mkdir -p .repo/local_manifests
           {
             echo '<manifest>'
-            echo '  <remote name="github" fetch="https://github.com" />'
             for p in cts developers/build developers/samples/android \
               device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
               device/generic/car device/generic/common device/generic/goldfish \
@@ -82,13 +89,9 @@ jobs:
               grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
                 echo "  <remove-project path=\"$p\" />"
             done
-            # TWRP 组件：移除 AOSP 的 bootable/recovery，换 TeamWin 的实现
-            echo '  <remove-project name="platform/bootable/recovery" />'
-            echo '  <project path="bootable/recovery" name="TeamWin/android_bootable_recovery" remote="github" revision="android-12.1" />'
-            echo '  <project path="vendor/twrp" name="TeamWin/android_vendor_twrp" remote="github" revision="android-12.1" />'
             echo '</manifest>'
-          } > .repo/local_manifests/twrp.xml
-          cat .repo/local_manifests/twrp.xml
+          } > .repo/local_manifests/remove.xml
+          cat .repo/local_manifests/remove.xml
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
@@ -109,9 +112,19 @@ jobs:
         run: |
           cd /home/runner/fox_build
           mkdir -p device/xiaomi
-          git clone --depth=1 -b fox-12.1 \
-            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git \
+          # crDroid A16 设备树（最新 ROM 树）+ ScribeSavant 的 TWRP recovery 配置
+          git clone --depth=1 -b 16.0 \
+            https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
+          git clone --depth=1 -b fox-12.1 \
+            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git /tmp/sav
+          cp -r /tmp/sav/recovery device/xiaomi/lmi/
+          cp /tmp/sav/twrp_lmi.mk device/xiaomi/lmi/
+          cp /tmp/sav/vendorsetup.sh device/xiaomi/lmi/
+          cp -r /tmp/sav/prebuilt device/xiaomi/lmi/
+          cat /tmp/sav/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
+          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY)' /tmp/sav/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
+          cp /tmp/sav/twrp.dependencies device/xiaomi/lmi/ 2>/dev/null || true
 
           # [2026-10-18] AstideLabs erofs 内核已弃用：改用设备树自带的 prebuilt 内核（TWRP 编译，无 erofs）
           # 设备树 ScribeSavant/device_xiaomi_lmi-TWRP 自带 prebuilt/{Image.gz-dtb,dtb.img,dtbo.img}，无需覆盖
@@ -128,12 +141,43 @@ jobs:
           sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
           grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' device/xiaomi/lmi/BoardConfig.mk
 
-          # 加密：FBE v2（lmi MIUI 13+）
-          sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk || true
+          # A16 对预编译 ELF 强制 16KB 页对齐检查，TWRP 老 magiskboot(4K) 被杀；lmi 是 4KB page 内核，全局豁免（检查器官方 device mk 开关）
+          echo 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' >> device/xiaomi/lmi/device.mk
+          grep -q 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' device/xiaomi/lmi/device.mk
 
-          # test/vts 等已从 sync 排除——TWRP A12 的 main.mk 无需处理
+          # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
+          sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
 
-          # vts 注入：TWRP A12 不需要（那是 A16 assemble_vintf 的依赖）
+          # fox_16.0 废弃变量批量改名（语义等价，依据 orangefox.mk 的 obsolete 检查全清单一次改完，避免逐轮试错）
+          find device/xiaomi/lmi -type f \( -name '*.sh' -o -name '*.mk' \) -exec sed -i \
+            -e 's/\bOF_TARGET_DEVICES=/FOX_TARGET_DEVICES=/' \
+            -e 's/\bFOX_ADVANCED_SECURITY=/OF_ADVANCED_SECURITY=/' \
+            -e 's/\bFOX_USE_LZMA_COMPRESSION=/OF_USE_LZMA_COMPRESSION=/' \
+            -e 's/\bFOX_USE_LZ4_COMPRESSION=/OF_USE_LZ4_COMPRESSION=/' \
+            -e 's/\bFOX_USE_DMCTL=/OF_USE_DMCTL=/' \
+            -e 's/\bOF_AB_DEVICE=/FOX_AB_DEVICE=/' \
+            -e 's/\bOF_VIRTUAL_AB_DEVICE=/FOX_VIRTUAL_AB_DEVICE=/' \
+            -e 's/\bOF_VENDOR_BOOT_RECOVERY=/FOX_VENDOR_BOOT_RECOVERY=/' \
+            -e 's/\bOF_PATCH_VBMETA_FLAG=/FOX_PATCH_VBMETA_FLAG=/' \
+            -e 's/\bOF_VANILLA_BUILD=/FOX_VANILLA_BUILD=/' \
+            -e '/TW_INCLUDE_INJECTTWRP/d' \
+            {} +
+
+          # test/vts 等已从 sync 排除，但 vts/tvts 仍在 main.mk 的 test-suite 依赖展开循环中，
+          # 其 COMPATIBILITY_TESTCASES_OUT_* 未定义会拼出 /lib/libbase.so（kati writing to readonly directory 报错）。
+          # 跳过 vts/tvts（recoveryimage 不依赖它们），grep 断言防止 A16 源码格式差异导致 sed 静默失配
+          sed -i 's/device-tests vts tvts art-host-tests/device-tests art-host-tests/' build/make/core/main.mk
+          grep -q 'general-tests device-tests art-host-tests host-unit-tests' build/make/core/main.mk
+
+          # libvts_vintf_test_common 定义在被排除的 test/vts-testcase/hal 里，但 assemble_vintf 硬依赖它；
+          # 其依赖仅 libbase/libvintf（均在树内），只从 googlesource 补该模块 3 个小文件，不整仓恢复
+          VLIB=test/vts-testcase/hal/treble/vintf/libvts_vintf_test_common
+          VURL=https://android.googlesource.com/platform/test/vts-testcase/hal/+/master/treble/vintf/libvts_vintf_test_common
+          mkdir -p "$VLIB/include/libvts_vintf_test_common"
+          curl -fsSL --retry 3 "$VURL/Android.bp?format=TEXT" | base64 -d > "$VLIB/Android.bp"
+          curl -fsSL --retry 3 "$VURL/common.cpp?format=TEXT" | base64 -d > "$VLIB/common.cpp"
+          curl -fsSL --retry 3 "$VURL/include/libvts_vintf_test_common/common.h?format=TEXT" | base64 -d > "$VLIB/include/libvts_vintf_test_common/common.h"
+          grep -q 'name: "libvts_vintf_test_common"' "$VLIB/Android.bp" && [ -s "$VLIB/common.cpp" ]
 
           # openaes 是 K&R 旧式 C 代码：gnu99 保证可解析，再关掉 deprecated-non-prototype 的警告升级（AOSP 全局 -Werror）
           sed -i \
@@ -145,7 +189,14 @@ jobs:
           # 加密自动检测（FBEv1/v2/FDE）
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
-          # Magisk/语言：TWRP 无 OrangeFox 的 OF_/FOX_ 变量，无需处理
+          # [2026-10-18] 用户决定：去掉 Magisk 集成（恢复删除 magisk export 的 sed；16K 豁免保留）
+          sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
+            -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
+            -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
+
+          # [2026-10-18] 中文默认已移除：恢复 OrangeFox 默认（设备树无 TW_DEFAULT_LANGUAGE，sed 无实际效果）
+          # 如需恢复中文默认，取消下方注释：
+          # sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
 
           # 减少编译量
           grep -q 'TW_USE_TOOLBOX := false' device/xiaomi/lmi/BoardConfig.mk || \
@@ -159,10 +210,33 @@ jobs:
             bootable/recovery/Android.mk \
             bootable/recovery/libtar/Android.mk
 
-          # 语言：TWRP 默认英文，无需处理
+          # [2026-10-18] 中文语言覆盖已移除：en.xml 恢复 OrangeFox 原始英文，extra-languages 全保留
+          # 如需恢复中文界面，取消下方注释：
+          # cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
+          #    bootable/recovery/gui/theme/common/languages/en.xml
+          # rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
 
-          # A16 专属适配全部移除：A12 保留设备树原值（PLATFORM_VERSION := 12、hardware/qcom/bootctrl 存在、
-          # lunch twrp_lmi-eng、twrp.dependencies 保留）
+          # A16 API 适配
+          sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
+          sed -i 's/PRODUCT_TARGET_VNDK_VERSION := 31/PRODUCT_TARGET_VNDK_VERSION := 36/' device/xiaomi/lmi/device.mk
+
+          # A16 manifest 没有 hardware/qcom/bootctrl，删掉无效的 namespace import
+          sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp
+          # bootctrl 的 defaults/srcs 全在 hardware/qcom/bootctrl（A16 不存在），lmi 非 A/B 设备用不到
+          rm -rf device/xiaomi/lmi/bootctrl
+          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk
+
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
+
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
+
+          # A16 lunch 必须三段式，release 用 bp2a（aosp_current 的目标，trunk_staging 在 A16 不存在）
+          sed -i 's/twrp_lmi-eng/twrp_lmi-bp2a-eng/' device/xiaomi/lmi/AndroidProducts.mk
+
+          # 让 manifest 提供 twrp-common（避免拉 12.1 版本冲突）
+          rm -f device/xiaomi/lmi/twrp.dependencies
 
       - name: 编译 Recovery
         run: |
@@ -192,9 +266,9 @@ jobs:
           ccache -M 7G
           ccache -o compression=true
           ccache -z
-          lunch twrp_lmi-eng \
-            || lunch twrp_lmi-userdebug \
-            || lunch twrp_lmi
+          lunch twrp_lmi-bp2a-eng \
+            || lunch twrp_lmi-ap3a-eng \
+            || lunch twrp_lmi-ap2a-eng
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
@@ -217,8 +291,9 @@ jobs:
 
       - name: 生成文件名
         run: |
-          # TWRP 3.7.1（android-12.1 分支）
-          OUT="TWRP-3.7.1-lmi-$(date +%Y%m%d%H%M).img"
+          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
+          [ -z "$VER" ] && VER="R12"
+          OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
@@ -226,20 +301,20 @@ jobs:
       - name: 上传 Recovery 镜像
         uses: actions/upload-artifact@v4
         with:
-          name: twrp-recovery-lmi
+          name: orangefox-recovery-lmi
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
       - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: twrp-lmi-${{ github.run_number }}
-          name: TWRP 3.7.1 for lmi (${{ github.run_number }})
+          tag_name: orangefox-lmi-${{ github.run_number }}
+          name: OrangeFox Recovery for lmi (${{ github.run_number }})
           body: |
-            自动编译的 TWRP 3.7.1 Recovery（android-12.1 分支）
+            自动编译的 OrangeFox Recovery
             设备: lmi
-            基础: AOSP android-12.1.0_r27 + TeamWin recovery/vendor
-            加密: FBE v2
+            OrangeFox 分支: ${{ github.event.inputs.fox_branch }}
+            加密: 自动检测
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
