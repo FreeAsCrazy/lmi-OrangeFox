@@ -68,49 +68,30 @@ jobs:
           mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
           repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
             -b ${{ github.event.inputs.fox_branch }}
-          # 瘦身：按白名单生成 remove-project（1018 → 263 项目，砍 74%）。
-          # 白名单来自 Run #27 日志的 soong 模块引用图（//path:module = 实际参与编译的项目）
-          # + 保守保留组（prebuilts 工具链 / device / build / vendor / art 系）。
-          # 走 local_manifests 移除，不直接改 manifests/*.xml：从「repo manifest -o 展开清单」
-          # 反向挑白名单外项目，目标必然存在 → 不会 remove 悬空，也不会 duplicate。
-          curl -fsSL --connect-timeout 8 --max-time 30 --retry 2 \
-            "https://gh-proxy.com/https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
-            -o "$RUNNER_TEMP/keep.txt" \
-            || curl -fsSL --connect-timeout 8 --max-time 30 --retry 2 \
-            "https://raw.githubusercontent.com/FreeAsCrazy/lmi-OrangeFox/main/keep_projects.txt" \
-            -o "$RUNNER_TEMP/keep.txt"
-          wc -l "$RUNNER_TEMP/keep.txt"
-          # 读 manifests/*.xml 模拟 repo 展开（twrp fork remove 生效后）→ 白名单外项目生成 remove
-          python3 - "$RUNNER_TEMP/keep.txt" <<'PYEOF'
-          import re, sys
-          keep = {l.strip() for l in open(sys.argv[1]) if l.strip()}
-          projs, removes = [], []
-          for f in ('.repo/manifests/default.xml', '.repo/manifests/twrp-default.xml'):
-              for ln in open(f):
-                  m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
-                  if m:
-                      projs.append(dict(re.findall(r'(\w+)="([^"]*)"', ln)))
-                      continue
-                  r = re.search(r'<remove-project\b[^>]*\b(name|path)="([^"]+)"', ln)
-                  if r:
-                      removes.append((r.group(1), r.group(2)))
-          final = projs[:]
-          for attr, val in removes:
-              key = 'name' if attr == 'name' else 'path'
-              final = [p for p in final if p.get(key) != val]
-          out, seen = ['<manifest>'], set()
-          for p in final:
-              path, name = p.get('path'), p.get('name')
-              if path and path not in keep and name and name not in seen:
-                  seen.add(name)
-                  out.append(f'  <remove-project name="{name}" />')
-          out.append('</manifest>')
-          print('\n'.join(out))
-          PYEOF
-          > "$RUNNER_TEMP/slim.xml"
+          # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
+          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
+          repo manifest -o "$RUNNER_TEMP/manifest.xml"
           mkdir -p .repo/local_manifests
-          cp "$RUNNER_TEMP/slim.xml" .repo/local_manifests/slim.xml
-          echo "slim: remove 项目数 = $(grep -c remove-project "$RUNNER_TEMP/slim.xml")"
+          {
+            echo '<manifest>'
+            for p in cts developers/build developers/samples/android \
+              device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
+              device/generic/car device/generic/common device/generic/goldfish \
+              device/generic/goldfish-opengl device/generic/trusty device/generic/x86 \
+              device/generic/x86_64 device/google/atv device/google/contexthub \
+              device/google/common/etm device/google/cuttlefish \
+              device/google/cuttlefish_prebuilts device/google/cuttlefish_vmm \
+              device/google/trout sdk test/dittosuite test/robolectric-extensions \
+              test/mlts/benchmark test/mlts/models test/cts-root \
+              test/mts test/suite_harness test/vts test/vts-testcase/hal \
+              test/vts-testcase/kernel test/vts-testcase/nbu test/vts-testcase/performance \
+              test/vts-testcase/security test/vts-testcase/vndk test/catbox; do
+              grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
+                echo "  <remove-project path=\"$p\" />"
+            done
+            echo '</manifest>'
+          } > .repo/local_manifests/remove.xml
+          cat .repo/local_manifests/remove.xml
           success=false
           for i in 1 2 3 4 5; do
             if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
@@ -122,8 +103,6 @@ jobs:
           done
           [ "$success" = true ]
           rm -rf .repo
-          # 编译不需要 git 元数据，删各项目 .git 释放磁盘（depth=1 也有 1-3GB）
-          find . -name .git -prune -exec rm -rf {} + 2>/dev/null || true
           # GKI 内核 prebuilts 与 recovery 无关，其 Android.bp 加大 soong 分析内存，删除
           # （rust/NDK 不可删：A16 bionic libc 的 librustlibs.a 硬依赖 prebuilts/rust 的 rustc）
           rm -rf kernel/prebuilts
@@ -146,44 +125,6 @@ jobs:
           cat /tmp/ak3/kernels/aosp/dtb >> device/xiaomi/lmi/prebuilt/Image.gz-dtb
           cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
           cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
-
-          # === 日志增强（诊断 UI 卡死）：给恢复启动路径注入阶段日志 ===
-          # 恢复源码在 vendor/recovery/（vendor/twrp 内），日志宏自适应（优先 LOGE→LOGI→LOGD→ui_print）
-          RECDIR=vendor/recovery
-          python3 - "$RECDIR" <<'PYEOF'
-          import sys, os
-          recdir = sys.argv[1]
-          f = os.path.join(recdir, 'recovery.cpp')
-          if not os.path.isfile(f):
-              print(f'WARN: {f} 不存在，结构：')
-              for root, dirs, files in os.walk(recdir):
-                  depth = root.replace(recdir, '').count(os.sep)
-                  if depth >= 2:
-                      dirs[:] = []
-                      continue
-                  for x in sorted(files):
-                      if x.endswith(('.cpp', '.h')):
-                          print('  ', os.path.join(root, x))
-              sys.exit(0)
-          src = open(f, encoding='utf-8', errors='ignore').read()
-          macro = next((m for m in ('LOGE', 'LOGI', 'LOGD', 'ui_print')
-                        if (m + '(') in src or (m + ' (') in src), None)
-          if not macro:
-              print('WARN: recovery.cpp 无已知日志宏（LOGE/LOGI/LOGD/ui_print），需人工确认')
-              sys.exit(0)
-          marker = '[LOG] recovery main() enter'
-          if marker in src:
-              print('已注入过，跳过')
-              sys.exit(0)
-          idx = src.find('int main(int argc, char **argv)')
-          if idx < 0:
-              print('WARN: main() 签名未匹配（可能非标准签名），需人工确认')
-              sys.exit(0)
-          brace = src.find('{', idx)
-          src = src[:brace + 1] + f'\n    {macro}("{marker} argc=%d\\n", argc);' + src[brace + 1:]
-          open(f, 'w').write(src)
-          print(f'日志增强已注入 recovery.cpp（{macro}）')
-          PYEOF
 
           # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON（merge_json 报 line40 RecoveryPixelFormat 缺逗号）
           sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
@@ -315,26 +256,9 @@ jobs:
           lunch twrp_lmi-bp2a-eng \
             || lunch twrp_lmi-ap3a-eng \
             || lunch twrp_lmi-ap2a-eng
-          # dump 脚本落文件（heredoc 必须在步骤顶层：函数内嵌会因缩进破坏 bash heredoc）
-          cat > "$RUNNER_TEMP/dump_closure.py" <<'PYEOF'
-          import json
-          mi = json.load(open('out/soong/module-info.json'))
-          seen, stack = set(), ['recoveryimage']
-          while stack:
-              m = stack.pop()
-              if m in seen or m not in mi:
-                  continue
-              seen.add(m)
-              stack.extend(mi[m].get('dependencies', []))
-          paths = sorted({p for m in seen for p in mi[m].get('path', []) if p})
-          print(f'===== 依赖闭包: {len(seen)} 模块 / {len(paths)} 项目路径（含 header-only，用于更新白名单）:')
-          print('\n'.join(paths))
-          PYEOF
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
-          # 成败都 dump 依赖闭包（白名单下一轮按此精确更新，含 header-only 项目）
-          [ -f out/soong/module-info.json ] && { python3 "$RUNNER_TEMP/dump_closure.py" || true; }
           if [ "$RC" -ne 0 ]; then
             echo '===== extra.variables 前 45 行（定位 JSON 坏行）:'
             sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1
@@ -354,12 +278,9 @@ jobs:
 
       - name: 生成文件名
         run: |
-          # 橙狐真版本取 build 系统自己生成的产物名（OrangeFox-R12.0_3-Beta-lmi.img）
-          # → R12.0_3 = 橙狐版本 R12.0 + 维护者补丁号 3；vendorsetup 里的值只是补丁号，不是版本号
-          SRC=$(ls /home/runner/fox_build/out/target/product/lmi/OrangeFox-*.img 2>/dev/null | head -1)
-          VER=$(basename "$SRC" 2>/dev/null | sed -E 's/^OrangeFox-//; s/-lmi\.img$//; s/-[A-Za-z]+$//')
-          [ -z "$VER" ] && VER="R12.0"
-          OUT="OrangeFox-${VER}-A16-$(TZ=Asia/Shanghai date +%Y%m%d%H%M%S).img"
+          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
+          [ -z "$VER" ] && VER="R12"
+          OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "文件名: $OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
