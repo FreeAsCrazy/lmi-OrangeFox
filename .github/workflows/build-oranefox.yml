@@ -81,7 +81,19 @@ jobs:
           python3 - "$RUNNER_TEMP/keep.txt" <<'PYEOF'
           import re, sys
           keep = {l.strip() for l in open(sys.argv[1]) if l.strip()}
-          for f in ('.repo/manifests/default.xml', '.repo/manifests/twrp-default.xml'):
+          files = ('.repo/manifests/default.xml', '.repo/manifests/twrp-default.xml')
+          # 阶段1：收集过滤后仍存在的项目（name/path），供 remove-project 判定
+          kept_names, kept_paths = set(), set()
+          for f in files:
+              for ln in open(f):
+                  m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
+                  if m and m.group(1) in keep:
+                      kept_paths.add(m.group(1))
+                      nm = re.search(r'\bname="([^"]+)"', ln)
+                      if nm:
+                          kept_names.add(nm.group(1))
+          # 阶段2：过滤 project；remove-project 仅在目标仍存在时保留（否则 duplicate 或悬空）
+          for f in files:
               out, skip = [], False
               for ln in open(f).read().split('\n'):
                   m = re.search(r'<project\b[^>]*\bpath="([^"]+)"', ln)
@@ -95,11 +107,16 @@ jobs:
                       if '</project>' in ln:
                           skip = False
                       continue
-                  if '<remove-project' in ln:
-                      continue  # 过滤后 manifest 即白名单，残留 remove-project 会因目标已被删而报错
+                  rm = re.search(r'<remove-project\b[^>]*\b(name|path)="([^"]+)"', ln)
+                  if rm:
+                      still = (rm.group(2) in kept_names) if rm.group(1) == 'name' else (rm.group(2) in kept_paths)
+                      if still:
+                          out.append(ln)
+                      continue
                   out.append(ln)
               open(f, 'w').write('\n'.join(out))
-              print(f, '过滤后项目数:', len(re.findall(r'<project\b', '\n'.join(out))))
+              print(f, '过滤后项目数:', len(re.findall(r'<project\b', '\n'.join(out))),
+                    '| remove-project:', len(re.findall(r'<remove-project', '\n'.join(out))))
           PYEOF
           success=false
           for i in 1 2 3 4 5; do
