@@ -147,6 +147,44 @@ jobs:
           cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
           cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
 
+          # === 日志增强（诊断 UI 卡死）：给恢复启动路径注入阶段日志 ===
+          # 恢复源码在 vendor/recovery/（vendor/twrp 内），日志宏自适应（优先 LOGE→LOGI→LOGD→ui_print）
+          RECDIR=vendor/recovery
+          python3 - "$RECDIR" <<'PYEOF'
+          import sys, os
+          recdir = sys.argv[1]
+          f = os.path.join(recdir, 'recovery.cpp')
+          if not os.path.isfile(f):
+              print(f'WARN: {f} 不存在，结构：')
+              for root, dirs, files in os.walk(recdir):
+                  depth = root.replace(recdir, '').count(os.sep)
+                  if depth >= 2:
+                      dirs[:] = []
+                      continue
+                  for x in sorted(files):
+                      if x.endswith(('.cpp', '.h')):
+                          print('  ', os.path.join(root, x))
+              sys.exit(0)
+          src = open(f, encoding='utf-8', errors='ignore').read()
+          macro = next((m for m in ('LOGE', 'LOGI', 'LOGD', 'ui_print')
+                        if (m + '(') in src or (m + ' (') in src), None)
+          if not macro:
+              print('WARN: recovery.cpp 无已知日志宏（LOGE/LOGI/LOGD/ui_print），需人工确认')
+              sys.exit(0)
+          marker = '[LOG] recovery main() enter'
+          if marker in src:
+              print('已注入过，跳过')
+              sys.exit(0)
+          idx = src.find('int main(int argc, char **argv)')
+          if idx < 0:
+              print('WARN: main() 签名未匹配（可能非标准签名），需人工确认')
+              sys.exit(0)
+          brace = src.find('{', idx)
+          src = src[:brace + 1] + f'\n    {macro}("{marker} argc=%d\\n", argc);' + src[brace + 1:]
+          open(f, 'w').write(src)
+          print(f'日志增强已注入 recovery.cpp（{macro}）')
+          PYEOF
+
           # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON（merge_json 报 line40 RecoveryPixelFormat 缺逗号）
           sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
           grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' device/xiaomi/lmi/BoardConfig.mk
