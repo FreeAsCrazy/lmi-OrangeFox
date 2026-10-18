@@ -103,7 +103,12 @@ jobs:
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          # 5b. 参考树（只读，不 clone 到设备树）
+          # 5b. vendor blobs（crDroid 的 device.mk 需要 vendor/xiaomi/lmi/lmi-vendor.mk）
+          mkdir -p vendor/xiaomi
+          git clone --depth=1 -b lineage-23.2 \
+            https://github.com/TheMuppets/proprietary_vendor_xiaomi_lmi.git \
+            vendor/xiaomi/lmi
+          # 5b2. 参考树（只读，不 clone 到设备树）
           git clone --depth=1 -b fox_12.1 \
             https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
           # 5c. 补丁：TWRP recovery 配置 + product + 内核
