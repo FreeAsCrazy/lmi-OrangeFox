@@ -103,11 +103,12 @@ jobs:
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          # 5b. vendor blobs（crDroid 的 device.mk 需要 vendor/xiaomi/lmi/lmi-vendor.mk）
+          # 5b. vendor blobs（从 Release 下载，替代 TheMuppets clone）
           mkdir -p vendor/xiaomi
-          git clone --depth=1 -b lineage-23.2 \
-            https://github.com/TheMuppets/proprietary_vendor_xiaomi_lmi.git \
-            vendor/xiaomi/lmi
+          curl -fsSL --retry 3 -o /tmp/vendor.tar.gz \
+            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/vendor_xiaomi_lmi.tar.gz"
+          tar -xzf /tmp/vendor.tar.gz -C vendor/
+          ls vendor/xiaomi/lmi/lmi-vendor.mk
           # 5b2. 参考树（只读，不 clone 到设备树）
           git clone --depth=1 -b fox_12.1 \
             https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
@@ -187,13 +188,13 @@ jobs:
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
-      - name: 9. Release
+      - name: 9. Release（统一上传到 prebuilt Release）
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: lmi-recovery-${{ github.run_number }}
-          name: lmi Recovery #${{ github.run_number }}（crDroid 树）
+          tag_name: prebuilt
+          name: lmi recovery (builds + prebuilt assets)
           body: |
-            crDroid android-16.0 设备树 + OrangeFox fox_16.0 源码，标准构建（无补丁）
+            prebuilt 资源（kernel/dtbo/vendor）+ 每次编译产物
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
