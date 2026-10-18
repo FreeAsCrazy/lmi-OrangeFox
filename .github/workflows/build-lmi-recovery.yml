@@ -118,9 +118,11 @@ jobs:
           grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
           # 5g. TWRP 依赖
           cp /tmp/sponmer/twrp.dependencies device/xiaomi/lmi/ 2>/dev/null || true
-          # 5h. 验证
+          # 5h. 删除其他设备的 vendorsetup（OrangeFox manifest 自带的 mondrian 等旧格式导致 envsetup css 崩溃）
+          find device -name 'vendorsetup.sh' ! -path 'device/xiaomi/lmi/*' -delete 2>/dev/null || true
+          # 5i. 验证
           echo "=== 补丁检查："
-          for f in twrp_lmi.mk prebuilt/Image.gz-dtb recovery/root/init.recovery.qcom.rc AndroidProducts.mk BoardConfig.mk; do
+          for f in twrp_lmi.mk prebuilt/kernel recovery/root/init.recovery.qcom.rc AndroidProducts.mk BoardConfig.mk; do
             [ -e "device/xiaomi/lmi/$f" ] && echo "  ✓ $f" || echo "  ✗ $f 缺失"
           done
           grep -c 'twrp_lmi' device/xiaomi/lmi/AndroidProducts.mk
