@@ -111,10 +111,16 @@ jobs:
           # 5b2. 参考树（只读，不 clone 到设备树）
           git clone --depth=1 -b fox_12.1 \
             https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
-          # 5c. 补丁：TWRP recovery 配置 + product + 内核
+          # 5c. 补丁：TWRP recovery 配置 + product（不复制 Sponmer 的 prebuilt）
           cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
           cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
-          cp -r /tmp/sponmer/prebuilt device/xiaomi/lmi/
+          # 5c2. A16 prebuilt（从 Release 下载，替换 Sponmer 的 A12 内核）
+          mkdir -p device/xiaomi/lmi/prebuilt
+          curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/kernel \
+            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/kernel"
+          curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/dtbo.img \
+            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo.img"
+          ls -la device/xiaomi/lmi/prebuilt/
           # 5d. 删除不兼容的 vendorsetup（旧格式会让 fox_16.0 envsetup 崩溃）
           rm -f device/xiaomi/lmi/vendorsetup.sh
           # 5e. product 注册
