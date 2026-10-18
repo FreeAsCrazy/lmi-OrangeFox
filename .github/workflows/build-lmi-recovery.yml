@@ -94,23 +94,33 @@ jobs:
           done
           df -h /
 
-      # ---------- 设备树（纯 crDroid A16，不合并任何 TWRP 配置） ----------
+      # ---------- 设备树（crDroid A16 + 参考 Sponmer 打补丁） ----------
       - name: 5. 放入设备树
         run: |
           cd /home/runner/build
           mkdir -p device/xiaomi
+          # 5a. crDroid A16 ROM 设备树（基础）
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          echo "=== 设备树结构："
-          ls device/xiaomi/lmi | head -20
-          echo "=== AndroidProducts.mk："
-          cat device/xiaomi/lmi/AndroidProducts.mk
-          echo "=== 是否有 twrp product："
-          grep -i 'twrp' device/xiaomi/lmi/AndroidProducts.mk || echo "（无 twrp product）"
+          # 5b. 参考树（只读，不 clone 到设备树）
+          git clone --depth=1 -b fox_12.1 \
+            https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
+          # 5c. 补丁：TWRP recovery 配置 + product + 内核
+          cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
+          cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
+          cp -r /tmp/sponmer/prebuilt device/xiaomi/lmi/
+          # 5d. 删除不兼容的 vendorsetup（旧格式会让 fox_16.0 envsetup 崩溃）
+          rm -f device/xiaomi/lmi/vendorsetup.sh
+          # 5e. product 注册
+          cat /tmp/sponmer/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
+          # 5f. TWRP 的 BoardConfig 段
+          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
+          # 5g. TWRP 依赖
+          cp /tmp/sponmer/twrp.dependencies device/xiaomi/lmi/ 2>/dev/null || true
           # 5h. 验证
-          echo "=== 设备树合并检查："
-          for f in twrp_lmi.mk prebuilt/Image.gz-dtb AndroidProducts.mk BoardConfig.mk; do
+          echo "=== 补丁检查："
+          for f in twrp_lmi.mk prebuilt/Image.gz-dtb recovery/root/init.recovery.qcom.rc AndroidProducts.mk BoardConfig.mk; do
             [ -e "device/xiaomi/lmi/$f" ] && echo "  ✓ $f" || echo "  ✗ $f 缺失"
           done
           grep -c 'twrp_lmi' device/xiaomi/lmi/AndroidProducts.mk
