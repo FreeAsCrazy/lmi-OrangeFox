@@ -100,7 +100,7 @@ jobs:
           done
           df -h /
 
-      # ============ 设备树 ============
+      # ============ 设备树（Release 资源优先） ============
       - name: 5. 放入设备树
         run: |
           cd /home/runner/build
@@ -109,39 +109,46 @@ jobs:
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          # 5b. vendor blobs（从 Release，刷机包提取）
+          # 5b. [Release] vendor blobs（刷机包提取）
           curl -fsSL --retry 3 -o /tmp/vendor.tar.gz \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/vendor_xiaomi_lmi.tar.gz"
           tar -xzf /tmp/vendor.tar.gz -C vendor/
-          # 5c. TWRP 配置参考树（sponmer）
+          # 5c. [sponmer] TWRP product + recovery 配置
           git clone --depth=1 -b fox_12.1 \
             https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
           cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
           cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
-          # 5d. A16 recovery.fstab（从刷机包提取，crDroid 分区 + erofs）
+          # 5d. [Release] A16 recovery.fstab（crDroid 分区 + erofs）
           curl -fsSL --retry 3 -o device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab \
             "https://raw.githubusercontent.com/FreeAsCrazy/lmi-recovery/main/prebuilt/recovery_A16.fstab"
-          # 5e. A16 内核/dtbo（从刷机包提取）
+          # 5e. [Release] A16 内核 / dtbo（刷机包提取）
           mkdir -p device/xiaomi/lmi/prebuilt
           curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/kernel \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/kernel"
           curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/dtbo.img \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo.img"
-          # 5f. 删除不兼容的 vendorsetup（crDroid 旧格式 + OrangeFox manifest 自带的其他设备）
+          # 5f. [Scribe] 设备模块（bootctrl/gpt-utils，crDroid 树可能缺）
+          git clone --depth=1 -b fox-12.1 \
+            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git /tmp/scribe
+          cp -r /tmp/scribe/bootctrl device/xiaomi/lmi/ 2>/dev/null || true
+          cp -r /tmp/scribe/gpt-utils device/xiaomi/lmi/ 2>/dev/null || true
+          # 5g. 删除不兼容 vendorsetup（crDroid 旧格式 + OrangeFox manifest 自带的其他设备）
           rm -f device/xiaomi/lmi/vendorsetup.sh
           find device -name 'vendorsetup.sh' ! -path 'device/xiaomi/lmi/*' -delete 2>/dev/null || true
-          # 5g. product 注册（sponmer 的 twrp_lmi）
+          # 5h. product 注册（sponmer 的 twrp_lmi）
           cat /tmp/sponmer/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
-          # 5h. TWRP 的 BoardConfig 段（sponmer 的 TW_*）
+          # 5i. [sponmer] TWRP BoardConfig 段（TW_*）
           grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
-          # 5i. TWRP FBE 解密（参考 umi A13 树）
+          # 5j. TWRP FBE 解密（参考 umi A13 树）
           echo 'BOARD_USES_QCOM_FBE_DECRYPTION := true' >> device/xiaomi/lmi/BoardConfig.mk
           echo 'TARGET_RECOVERY_DEVICE_MODULES := libinit_lmi' >> device/xiaomi/lmi/BoardConfig.mk
-          # 5j. 去掉 vendor sepolicy 依赖（OrangeFox manifest 无 device/qcom/sepolicy_vndr）
+          # 5k. 去掉缺失的 vendor sepolicy / A16 不存在的 bootctrl 引用
           sed -i '/device\/qcom\/sepolicy_vndr\/SEPolicy.mk/d' device/xiaomi/lmi/BoardConfig.mk
-          # 5k. 验证
-          echo "=== 设备树检查："
-          for f in twrp_lmi.mk prebuilt/kernel recovery/root/system/etc/recovery.fstab BoardConfig.mk; do
+          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk 2>/dev/null || true
+          sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp 2>/dev/null || true
+          # 5l. 验证
+          echo "=== 设备树检查（Release 资源优先）："
+          for f in twrp_lmi.mk prebuilt/kernel prebuilt/dtbo.img recovery/root/system/etc/recovery.fstab BoardConfig.mk bootctrl/Android.bp; do
             [ -e "device/xiaomi/lmi/$f" ] && echo "  ✓ $f" || echo "  ✗ $f 缺失"
           done
           grep -c 'twrp_lmi' device/xiaomi/lmi/AndroidProducts.mk
