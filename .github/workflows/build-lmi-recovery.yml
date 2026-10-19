@@ -59,10 +59,12 @@ jobs:
           mkdir -p /home/runner/prebuilt
           cd /home/runner/prebuilt
           
-          # 1. 内核：必须是 gzip(Image)+尾随 dtb；裸 Image（Release 里的 kernel）开不了机
-          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/Image.gz-dtb"
+          # 1. 内核：新设备树用 BOARD_BOOT_HEADER_VERSION=2 + BOARD_INCLUDE_DTB_IN_BOOTIMG，
+          #    所以要用裸 Image + 独立 dtb（AK3 同源，4.19.325，带 erofs）
+          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/ak3_Image"
+          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/ak3_dtb"
           
-          # 2. dtbo：AK3 版（与 #27 成功镜像同源）
+          # 2. dtbo：AK3 版
           curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo_ak3.img"
           
           # 3. vendor blobs (678MB，省去 vendor 编译)
@@ -132,13 +134,14 @@ jobs:
         run: |
           cd /home/runner/fox_build
           mkdir -p device/xiaomi
-          git clone --depth=1 -b fox-12.1 \
-            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git \
+          git clone --depth=1 -b fox_12.1 \
+            https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git \
             device/xiaomi/lmi
 
-          # 放入预编译内核 (来自 prebuilt Release)
-          mkdir -p device/xiaomi/lmi/prebuilt
-          cp /home/runner/prebuilt/Image.gz-dtb device/xiaomi/lmi/prebuilt/Image.gz-dtb
+          # 新设备树用 BOARD_INCLUDE_DTB_IN_BOOTIMG + 头版本 2：裸 Image + dtb 目录 + dtbo
+          mkdir -p device/xiaomi/lmi/prebuilt/dtb
+          cp /home/runner/prebuilt/ak3_Image device/xiaomi/lmi/prebuilt/kernel
+          cp /home/runner/prebuilt/ak3_dtb device/xiaomi/lmi/prebuilt/dtb/lmi.dtb
           cp /home/runner/prebuilt/dtbo_ak3.img device/xiaomi/lmi/prebuilt/dtbo.img
 
           # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON
@@ -190,14 +193,6 @@ jobs:
           # 加密自动检测
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
-          # 去掉 Magisk 集成
-          sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
-            -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
-            -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
-
-          # 默认简体中文
-          sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
-
           # 减少编译量
           grep -q 'TW_USE_TOOLBOX := false' device/xiaomi/lmi/BoardConfig.mk || \
             echo 'TW_USE_TOOLBOX := false' >> device/xiaomi/lmi/BoardConfig.mk
@@ -210,19 +205,9 @@ jobs:
             bootable/recovery/Android.mk \
             bootable/recovery/libtar/Android.mk
 
-          # 语言：简体中文覆盖默认 + 删除其他语言
-          cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
-             bootable/recovery/gui/theme/common/languages/en.xml
-          rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
-
           # A16 API 适配
           sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
           sed -i 's/PRODUCT_TARGET_VNDK_VERSION := 31/PRODUCT_TARGET_VNDK_VERSION := 36/' device/xiaomi/lmi/device.mk
-
-          # A16 manifest 没有 hardware/qcom/bootctrl
-          sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp
-          rm -rf device/xiaomi/lmi/bootctrl
-          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk
 
           # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12
           sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
