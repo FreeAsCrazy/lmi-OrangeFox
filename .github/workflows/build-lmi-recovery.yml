@@ -107,6 +107,12 @@ jobs:
               grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
                 echo "  <remove-project path=\"$p\" />"
             done
+            # OrangeFox GitLab 上这 3 个项目已 404，改用 AOSP 源 + 移除 fox-go
+            echo '  <remove-project path="external/libarchive" />'
+            echo '  <remove-project path="external/libfuse3" />'
+            echo '  <remove-project name="external/fox-go" />'
+            echo '  <project path="external/libarchive" name="platform/external/libarchive" remote="aosp" revision="refs/tags/android-16.0.0_r1" />'
+            echo '  <project path="external/libfuse3" name="platform/external/libfuse3" remote="aosp" revision="refs/tags/android-16.0.0_r1" />'
             echo '</manifest>'
           } > .repo/local_manifests/remove.xml
           cat .repo/local_manifests/remove.xml
