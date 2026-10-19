@@ -1,61 +1,75 @@
-name: 编译 lmi Recovery (Sponmer 树)
+name: 编译 OrangeFox Recovery - lmi (A16)
 
 on:
   workflow_dispatch:
+    inputs:
+      fox_branch:
+        description: 'OrangeFox 分支'
+        required: true
+        default: 'fox_16.0'
+        type: choice
+        options:
+          - fox_16.0
 
 concurrency:
-  group: lmi-build
+  group: orangefox-lmi-build
   cancel-in-progress: true
 
 jobs:
   build:
+    # ubuntu-22.04 已进入退役倒计时（2027-04 停止支持），平台回收 22.04 容量导致 runner 被中途关停，换 24.04
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
+    permissions:
+      contents: write
+
     steps:
-      # ============ 环境 ============
-      - name: 1. 释放磁盘
+      - name: 释放磁盘空间
         run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
-          sudo apt-get clean
+          df -h /
+          sudo bash -c 'rm -rf /usr/share/dotnet & rm -rf /usr/local/lib/android & rm -rf /opt/ghc /usr/local/share/boost /usr/share/swift /usr/local/.ghcup /opt/hostedtoolcache/CodeQL & wait'
           df -h /
 
-      - name: 2. 安装依赖
+      - name: 安装依赖
         run: |
           export DEBIAN_FRONTEND=noninteractive
           PKGS="git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            libc6-dev-i386 lib32ncurses-dev x11proto-core-dev libx11-dev \
-            lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
-            python3 python3-pip bc g++-multilib gcc-multilib libssl-dev libelf-dev ccache rsync"
+            libc6-dev-i386 libncurses-dev x11proto-core-dev libx11-dev \
+            libgl1-mesa-dev libxml2-utils xsltproc fontconfig python3 python3-pip \
+            openjdk-17-jdk bc g++-multilib gcc-multilib libssl-dev libelf-dev"
           sudo -E apt-get install -yq --no-install-recommends $PKGS || {
             sudo apt-get update
             sudo -E apt-get install -yq --no-install-recommends $PKGS
           }
+          # noble 移除了 libncurses5，但 AOSP prebuilt clang 运行需要 libncurses.so.5，从 focal 池补装
           N=6.2-0ubuntu2.1
           curl -fsSL --retry 3 -O "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_${N}_amd64.deb"
           curl -fsSL --retry 3 -O "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_${N}_amd64.deb"
-          sudo dpkg -i "libtinfo5_${N}_amd64.deb" "libncurses5_${N}_amd64.deb" || true
+          sudo dpkg -i "libtinfo5_${N}_amd64.deb" "libncurses5_${N}_amd64.deb"
           sudo apt-get clean
 
-      - name: 3. ccache 缓存
+      - name: 恢复编译缓存 (ccache)
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-lmi-sponmer-${{ github.run_id }}
+          key: ccache-${{ github.run_id }}
           restore-keys: |
-            ccache-lmi-sponmer-
+            ccache-
 
-      # ============ 同步源码 ============
-      - name: 4. repo init + sync
+      - name: 初始化 repo 并同步源码
         run: |
           mkdir -p ~/bin
-          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
+          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/bin/repo
           chmod a+x ~/bin/repo
           export PATH=~/bin:$PATH
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
 
-          mkdir -p /home/runner/build && cd /home/runner/build
-          repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_16.0
+          mkdir -p /home/runner/fox_build && cd /home/runner/fox_build
+          repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git \
+            -b ${{ github.event.inputs.fox_branch }}
+          # 排除不需要的项目（省磁盘）。只删 manifest 里真实存在的项目：
+          # repo 遇到不存在的 remove-project 会 ManifestParseError 直接退出。
           repo manifest -o "$RUNNER_TEMP/manifest.xml"
           mkdir -p .repo/local_manifests
           {
@@ -77,87 +91,217 @@ jobs:
             done
             echo '</manifest>'
           } > .repo/local_manifests/remove.xml
-
+          cat .repo/local_manifests/remove.xml
           success=false
           for i in 1 2 3 4 5; do
-            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --optimized-fetch --retry-fetches=10; then
-              success=true; break
+            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
+              success=true
+              break
             fi
-            echo "=== 第 $i 次 sync 失败，15 秒后重试 ==="; sleep 15
+            echo "=== 第 $i 次 repo sync 失败，15 秒后重试 ==="
+            sleep 15
           done
-          [ "$success" = true ] || exit 1
+          [ "$success" = true ]
           rm -rf .repo
+          # GKI 内核 prebuilts 与 recovery 无关，其 Android.bp 加大 soong 分析内存，删除
+          # （rust/NDK 不可删：A16 bionic libc 的 librustlibs.a 硬依赖 prebuilts/rust 的 rustc）
           rm -rf kernel/prebuilts
-          echo "=== sync 完成，目录检查："
-          for d in build/make build/soong bootable/recovery vendor/twrp system/vold system/core; do
-            [ -d "$d" ] && echo "  ✓ $d" || echo "  ✗ $d 缺失"
-          done
           df -h /
 
-      # ============ 设备树（Sponmer 参考） ============
-      - name: 5. 放入设备树
+      - name: 放入设备树并应用补丁
         run: |
-          cd /home/runner/build
+          cd /home/runner/fox_build
           mkdir -p device/xiaomi
-          git clone --depth=1 -b fox_12.1 \
-            https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git \
+          git clone --depth=1 -b fox-12.1 \
+            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git \
             device/xiaomi/lmi
-          echo "=== 设备树结构："
-          ls device/xiaomi/lmi
-          echo "=== AndroidProducts.mk："
-          cat device/xiaomi/lmi/AndroidProducts.mk
-          echo "=== twrp_lmi.mk 前 30 行："
-          head -30 device/xiaomi/lmi/twrp_lmi.mk
 
-      # ============ 编译 ============
-      - name: 6. 编译
+          # 换 A16 内核（AstideLabs sm8250 android16，含 erofs 支持，挂载 Android 16 的 system 需要）
+          # 格式转换：裸 Image → gzip 后拼 dtb = Image.gz-dtb（设备树 BoardConfig 的要求）
+          AK_URL="https://github.com/AstideLabs/android_kernel_xiaomi_sm8250/releases/download/v20260821-a8adb967/APTKernel_AOSP_lmi_NoKernelSU_20260821_095834_anykernel3_a8adb967.zip"
+          curl -sSL --retry 3 "$AK_URL" -o /tmp/ak3.zip
+          unzip -q -o /tmp/ak3.zip -d /tmp/ak3
+          gzip -9 -c /tmp/ak3/kernels/aosp/Image > device/xiaomi/lmi/prebuilt/Image.gz-dtb
+          cat /tmp/ak3/kernels/aosp/dtb >> device/xiaomi/lmi/prebuilt/Image.gz-dtb
+          cp /tmp/ak3/kernels/aosp/dtb device/xiaomi/lmi/prebuilt/dtb.img
+          cp /tmp/ak3/kernels/aosp/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
+
+          # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON（merge_json 报 line40 RecoveryPixelFormat 缺逗号）
+          sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
+          grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' device/xiaomi/lmi/BoardConfig.mk
+
+          # A16 对预编译 ELF 强制 16KB 页对齐检查，TWRP 老 magiskboot(4K) 被杀；lmi 是 4KB page 内核，全局豁免（检查器官方 device mk 开关）
+          echo 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' >> device/xiaomi/lmi/device.mk
+          grep -q 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' device/xiaomi/lmi/device.mk
+
+          # fox_16.0 废弃 FOX_VERSION（mak报 obsolete），改用纯数字的 FOX_MAINTAINER_PATCH_VERSION
+          sed -i 's/export FOX_VERSION="R11.1_3"/export FOX_MAINTAINER_PATCH_VERSION="3"/' device/xiaomi/lmi/vendorsetup.sh
+
+          # fox_16.0 废弃变量批量改名（语义等价，依据 orangefox.mk 的 obsolete 检查全清单一次改完，避免逐轮试错）
+          find device/xiaomi/lmi -type f \( -name '*.sh' -o -name '*.mk' \) -exec sed -i \
+            -e 's/\bOF_TARGET_DEVICES=/FOX_TARGET_DEVICES=/' \
+            -e 's/\bFOX_ADVANCED_SECURITY=/OF_ADVANCED_SECURITY=/' \
+            -e 's/\bFOX_USE_LZMA_COMPRESSION=/OF_USE_LZMA_COMPRESSION=/' \
+            -e 's/\bFOX_USE_LZ4_COMPRESSION=/OF_USE_LZ4_COMPRESSION=/' \
+            -e 's/\bFOX_USE_DMCTL=/OF_USE_DMCTL=/' \
+            -e 's/\bOF_AB_DEVICE=/FOX_AB_DEVICE=/' \
+            -e 's/\bOF_VIRTUAL_AB_DEVICE=/FOX_VIRTUAL_AB_DEVICE=/' \
+            -e 's/\bOF_VENDOR_BOOT_RECOVERY=/FOX_VENDOR_BOOT_RECOVERY=/' \
+            -e 's/\bOF_PATCH_VBMETA_FLAG=/FOX_PATCH_VBMETA_FLAG=/' \
+            -e 's/\bOF_VANILLA_BUILD=/FOX_VANILLA_BUILD=/' \
+            -e '/TW_INCLUDE_INJECTTWRP/d' \
+            {} +
+
+          # test/vts 等已从 sync 排除，但 vts/tvts 仍在 main.mk 的 test-suite 依赖展开循环中，
+          # 其 COMPATIBILITY_TESTCASES_OUT_* 未定义会拼出 /lib/libbase.so（kati writing to readonly directory 报错）。
+          # 跳过 vts/tvts（recoveryimage 不依赖它们），grep 断言防止 A16 源码格式差异导致 sed 静默失配
+          sed -i 's/device-tests vts tvts art-host-tests/device-tests art-host-tests/' build/make/core/main.mk
+          grep -q 'general-tests device-tests art-host-tests host-unit-tests' build/make/core/main.mk
+
+          # libvts_vintf_test_common 定义在被排除的 test/vts-testcase/hal 里，但 assemble_vintf 硬依赖它；
+          # 其依赖仅 libbase/libvintf（均在树内），只从 googlesource 补该模块 3 个小文件，不整仓恢复
+          VLIB=test/vts-testcase/hal/treble/vintf/libvts_vintf_test_common
+          VURL=https://android.googlesource.com/platform/test/vts-testcase/hal/+/master/treble/vintf/libvts_vintf_test_common
+          mkdir -p "$VLIB/include/libvts_vintf_test_common"
+          curl -fsSL --retry 3 "$VURL/Android.bp?format=TEXT" | base64 -d > "$VLIB/Android.bp"
+          curl -fsSL --retry 3 "$VURL/common.cpp?format=TEXT" | base64 -d > "$VLIB/common.cpp"
+          curl -fsSL --retry 3 "$VURL/include/libvts_vintf_test_common/common.h?format=TEXT" | base64 -d > "$VLIB/include/libvts_vintf_test_common/common.h"
+          grep -q 'name: "libvts_vintf_test_common"' "$VLIB/Android.bp" && [ -s "$VLIB/common.cpp" ]
+
+          # openaes 是 K&R 旧式 C 代码：gnu99 保证可解析，再关掉 deprecated-non-prototype 的警告升级（AOSP 全局 -Werror）
+          sed -i \
+            -e 's/LOCAL_CFLAGS:= -g -c -W/LOCAL_CFLAGS:= -g -c -W -std=gnu99 -Wno-deprecated-non-prototype -Wno-error=deprecated-non-prototype/' \
+            -e 's/^\(\tLOCAL_SRC_FILES = src\/oaes_lib.c\)/\tLOCAL_CFLAGS += -std=gnu99 -Wno-deprecated-non-prototype -Wno-error=deprecated-non-prototype\n\1/' \
+            bootable/recovery/openaes/Android.mk
+          grep -q 'Wno-error=deprecated-non-prototype' bootable/recovery/openaes/Android.mk
+
+          # 加密自动检测（FBEv1/v2/FDE）
+          sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
+
+          # 去掉 Magisk 集成（只删 export 语句，模式加 export 前缀避免误删 if 行导致语法错误）
+          sed -i -e '/export OF_USE_MAGISKBOOT=/d' \
+            -e '/export OF_USE_MAGISKBOOT_FOR_ALL_PATCHES=/d' \
+            -e '/export FOX_USE_SPECIFIC_MAGISK_ZIP=/d' device/xiaomi/lmi/vendorsetup.sh
+
+          # 默认简体中文
+          sed -i 's/TW_DEFAULT_LANGUAGE="en"/TW_DEFAULT_LANGUAGE="zh_CN"/' device/xiaomi/lmi/vendorsetup.sh
+
+          # 减少编译量
+          grep -q 'TW_USE_TOOLBOX := false' device/xiaomi/lmi/BoardConfig.mk || \
+            echo 'TW_USE_TOOLBOX := false' >> device/xiaomi/lmi/BoardConfig.mk
+
+          # openaes C23 原型问题
+          echo 'LOCAL_CFLAGS += -Wno-error=deprecated-non-prototype' >> bootable/recovery/openaes/Android.mk
+
+          # libtar 过时 ndk_platform 引用
+          sed -i 's/-ndk_platform/-ndk/g' \
+            bootable/recovery/Android.mk \
+            bootable/recovery/libtar/Android.mk
+
+          # 语言：简体中文覆盖默认 + 删除其他语言
+          cp bootable/recovery/gui/theme/extra-languages/languages/zh_CN.xml \
+             bootable/recovery/gui/theme/common/languages/en.xml
+          rm -f bootable/recovery/gui/theme/extra-languages/languages/*.xml
+
+          # A16 API 适配
+          sed -i 's/PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' device/xiaomi/lmi/device.mk
+          sed -i 's/PRODUCT_TARGET_VNDK_VERSION := 31/PRODUCT_TARGET_VNDK_VERSION := 36/' device/xiaomi/lmi/device.mk
+
+          # A16 manifest 没有 hardware/qcom/bootctrl，删掉无效的 namespace import
+          sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp
+          # bootctrl 的 defaults/srcs 全在 hardware/qcom/bootctrl（A16 不存在），lmi 非 A/B 设备用不到
+          rm -rf device/xiaomi/lmi/bootctrl
+          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk
+
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
+
+          # 设备树是 fox-12.1 的，硬编码了 PLATFORM_VERSION := 12，A16 下删掉让构建系统用默认值
+          sed -i '/^PLATFORM_VERSION := 12$/d' device/xiaomi/lmi/BoardConfig.mk
+
+          # A16 lunch 必须三段式，release 用 bp2a（aosp_current 的目标，trunk_staging 在 A16 不存在）
+          sed -i 's/twrp_lmi-eng/twrp_lmi-bp2a-eng/' device/xiaomi/lmi/AndroidProducts.mk
+
+          # 让 manifest 提供 twrp-common（避免拉 12.1 版本冲突）
+          rm -f device/xiaomi/lmi/twrp.dependencies
+
+      - name: 编译 Recovery
         run: |
-          cd /home/runner/build
-          export PATH=~/bin:$PATH
+          sudo bash -c 'swapoff /swapfile 2>/dev/null || true; rm -f /swapfile; fallocate -l 24G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=24576; chmod 600 /swapfile; mkswap /swapfile; swapon /swapfile'
+          mkdir -p /home/runner/output
+          free -h
+          df -h /
+          # 内存 watchdog：每 30 秒输出内存快照 + top5 RSS 进程，若 runner 再被宿主回收可作证据
+          ( while true; do echo "[$(date +%H:%M:%S)] $(free -h | awk '/^Mem:/{print "mem_used="$3" mem_avail="$4} /^Swap:/{print "swap_used="$3}')"; ps -eo rss,comm --sort=-rss | head -6 | tail -5 | awk '{printf "  rss=%dMB %s\n", $1/1024, $2}'; sleep 30; done ) &
+          cd /home/runner/fox_build
+          source build/envsetup.sh
+          export ALLOW_MISSING_DEPENDENCIES=true
+          # 限制 Go 堆目标（soong_build 是 Go 程序），压住 soong 分析 Android.bp 的内存峰值
+          export GOMEMLIMIT=12GiB
+          export SKIP_ABI_CHECKS=true
+          export FOX_USE_TWRP_RECOVERY_IMAGE_BUILDER=1
+          export LC_ALL=C
+          export FOX_BUGGED_AOSP_ARB_WORKAROUND="1588606644"
+          export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
+          export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
+          export OF_DONT_PATCH_ENCRYPTED_DEVICE=1
+          # ccache 加速：跨 run 复用编译缓存（restore-keys 回源最近一轮），二轮起省 30-50%
+          command -v ccache || sudo apt-get install -y ccache
           export USE_CCACHE=1
           export CCACHE_DIR="$HOME/.ccache"
           export CCACHE_EXEC="$(command -v ccache)"
-          ccache -M 7G || true
-          ccache -z || true
-
-          source build/envsetup.sh
-          lunch twrp_lmi-eng || lunch twrp_lmi-userdebug || lunch twrp_lmi
+          ccache -M 7G
+          ccache -o compression=true
+          ccache -z
+          lunch twrp_lmi-bp2a-eng \
+            || lunch twrp_lmi-ap3a-eng \
+            || lunch twrp_lmi-ap2a-eng
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
           if [ "$RC" -ne 0 ]; then
-            echo '===== 构建失败 ====='
+            echo '===== extra.variables 前 45 行（定位 JSON 坏行）:'
+            sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1
+            echo '===== json 精确报错:'
+            python3 -c "import json;json.load(open('out/soong/soong.twrp_lmi.extra.variables'))" 2>&1 | tail -3
             exit "$RC"
           fi
 
-      # ============ 产物 ============
-      - name: 7. 复制并上传
+      - name: 复制产物
         run: |
-          cd /home/runner/build
+          cd /home/runner/fox_build
           mkdir -p /home/runner/output
           cp out/target/product/lmi/recovery.img /home/runner/output/recovery.img
           ls -lh /home/runner/output/recovery.img
           file /home/runner/output/recovery.img
           md5sum /home/runner/output/recovery.img
-          OUT="lmi-recovery-A16-$(date +%Y%m%d%H%M).img"
+
+      - name: 生成文件名
+        run: |
+          VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' /home/runner/fox_build/device/xiaomi/lmi/vendorsetup.sh 2>/dev/null | head -1)
+          [ -z "$VER" ] && VER="R12"
+          OUT="OrangeFox-${VER}-$(date +%Y%m%d).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
+          echo "文件名: $OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
 
-      - name: 8. 上传 Artifact
+      - name: 上传 Recovery 镜像
         uses: actions/upload-artifact@v4
         with:
-          name: recovery-lmi
+          name: orangefox-recovery-lmi
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
-      - name: 9. Release
+      - name: 创建 Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: prebuilt
-          name: lmi recovery (Sponmer tree)
+          tag_name: orangefox-lmi-${{ github.run_number }}
+          name: OrangeFox Recovery for lmi (${{ github.run_number }})
           body: |
-            OrangeFox Recovery for lmi (Redmi K30 Pro / POCO F2 Pro)
-            设备树: Sponmer orangefox_device_xiaomi_lmi@fox_12.1
+            自动编译的 OrangeFox Recovery
+            设备: lmi
+            OrangeFox 分支: ${{ github.event.inputs.fox_branch }}
+            加密: 自动检测
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
