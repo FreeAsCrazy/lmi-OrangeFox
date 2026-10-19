@@ -59,12 +59,11 @@ jobs:
           mkdir -p /home/runner/prebuilt
           cd /home/runner/prebuilt
           
-          # 1. kernel (Image.gz-dtb 等价)
-          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/kernel"
-          mv kernel Image.gz-dtb
+          # 1. 内核：必须是 gzip(Image)+尾随 dtb；裸 Image（Release 里的 kernel）开不了机
+          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/Image.gz-dtb"
           
-          # 2. dtbo.img
-          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo.img"
+          # 2. dtbo：AK3 版（与 #27 成功镜像同源）
+          curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo_ak3.img"
           
           # 3. vendor blobs (678MB，省去 vendor 编译)
           curl -sSL --retry 3 -O "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/vendor_xiaomi_lmi.tar.gz"
@@ -140,7 +139,7 @@ jobs:
           # 放入预编译内核 (来自 prebuilt Release)
           mkdir -p device/xiaomi/lmi/prebuilt
           cp /home/runner/prebuilt/Image.gz-dtb device/xiaomi/lmi/prebuilt/Image.gz-dtb
-          cp /home/runner/prebuilt/dtbo.img device/xiaomi/lmi/prebuilt/dtbo.img
+          cp /home/runner/prebuilt/dtbo_ak3.img device/xiaomi/lmi/prebuilt/dtbo.img
 
           # BoardConfig 值带裸双引号会破坏 soong extra.variables JSON
           sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' device/xiaomi/lmi/BoardConfig.mk
