@@ -120,6 +120,10 @@ jobs:
           # 5c. 补丁：TWRP recovery 配置 + product（不复制 Sponmer 的 prebuilt）
           cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
           cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
+          # 5c1. A16 recovery.fstab（crDroid A16 分区 + erofs，刷机包提取）
+          curl -fsSL --retry 3 -o device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab \
+            "https://raw.githubusercontent.com/FreeAsCrazy/lmi-recovery/main/prebuilt/recovery_A16.fstab"
+          head -5 device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab
           # 5c2. A16 prebuilt（从 Release 下载，替换 Sponmer 的 A12 内核）
           mkdir -p device/xiaomi/lmi/prebuilt
           curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/kernel \
