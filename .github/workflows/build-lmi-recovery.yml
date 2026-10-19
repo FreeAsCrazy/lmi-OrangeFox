@@ -150,6 +150,9 @@ jobs:
           [ -f device/xiaomi/lmi/vendorsetup.sh ] && echo "  ✗ vendorsetup.sh 仍存在" || echo "  ✓ vendorsetup.sh 已删除"
           # 5j. 去掉 crDroid 的 vendor sepolicy 依赖（OrangeFox manifest 没有 device/qcom/sepolicy_vndr）
           sed -i '/device\/qcom\/sepolicy_vndr\/SEPolicy.mk/d' device/xiaomi/lmi/BoardConfig.mk
+          # 5k. TWRP FBE 解密配置（参考 umi A13 TWRP 树）
+          echo 'BOARD_USES_QCOM_FBE_DECRYPTION := true' >> device/xiaomi/lmi/BoardConfig.mk
+          echo 'TARGET_RECOVERY_DEVICE_MODULES := libinit_lmi' >> device/xiaomi/lmi/BoardConfig.mk
           echo "=== 补丁完成"
 
       # ---------- 编译（标准，无补丁） ----------
