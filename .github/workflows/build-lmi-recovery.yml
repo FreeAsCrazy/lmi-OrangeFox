@@ -1,18 +1,18 @@
-name: 编译 lmi Recovery (crDroid 树)
+name: 编译 lmi Recovery (crDroid A16 + TWRP)
 
 on:
   workflow_dispatch:
 
 concurrency:
   group: lmi-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
     steps:
-      # ---------- 环境 ----------
+      # ============ 环境 ============
       - name: 1. 释放磁盘
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
@@ -44,7 +44,7 @@ jobs:
           restore-keys: |
             ccache-lmi-
 
-      # ---------- 同步源码 ----------
+      # ============ 同步源码 ============
       - name: 4. repo init + sync
         run: |
           mkdir -p ~/bin
@@ -75,6 +75,7 @@ jobs:
               grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
                 echo "  <remove-project path=\"$p\" />"
             done
+            # OrangeFox GitLab 已 404 的项目：libarchive/libfuse3 用 AOSP 源，fox-go 跳过
             echo '  <remove-project path="external/libarchive" />'
             echo '  <remove-project path="external/libfuse3" />'
             echo '  <remove-project name="external/fox-go" />'
@@ -99,63 +100,53 @@ jobs:
           done
           df -h /
 
-      # ---------- 设备树（crDroid A16 + 参考 Sponmer 打补丁） ----------
+      # ============ 设备树 ============
       - name: 5. 放入设备树
         run: |
           cd /home/runner/build
-          mkdir -p device/xiaomi
-          # 5a. crDroid A16 ROM 设备树（基础）
+          mkdir -p device/xiaomi vendor/xiaomi
+          # 5a. crDroid A16 设备树（基础）
           git clone --depth=1 -b 16.0 \
             https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
             device/xiaomi/lmi
-          # 5b. vendor blobs（从 Release 下载，替代 TheMuppets clone）
-          mkdir -p vendor/xiaomi
+          # 5b. vendor blobs（从 Release，刷机包提取）
           curl -fsSL --retry 3 -o /tmp/vendor.tar.gz \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/vendor_xiaomi_lmi.tar.gz"
           tar -xzf /tmp/vendor.tar.gz -C vendor/
-          ls vendor/xiaomi/lmi/lmi-vendor.mk
-          # 5b2. 参考树（只读，不 clone 到设备树）
+          # 5c. TWRP 配置参考树（sponmer）
           git clone --depth=1 -b fox_12.1 \
             https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
-          # 5c. 补丁：TWRP recovery 配置 + product（不复制 Sponmer 的 prebuilt）
           cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
           cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
-          # 5c1. A16 recovery.fstab（crDroid A16 分区 + erofs，刷机包提取）
+          # 5d. A16 recovery.fstab（从刷机包提取，crDroid 分区 + erofs）
           curl -fsSL --retry 3 -o device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab \
             "https://raw.githubusercontent.com/FreeAsCrazy/lmi-recovery/main/prebuilt/recovery_A16.fstab"
-          head -5 device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab
-          # 5c2. A16 prebuilt（从 Release 下载，替换 Sponmer 的 A12 内核）
+          # 5e. A16 内核/dtbo（从刷机包提取）
           mkdir -p device/xiaomi/lmi/prebuilt
           curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/kernel \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/kernel"
           curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/dtbo.img \
             "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo.img"
-          ls -la device/xiaomi/lmi/prebuilt/
-          # 5d. 删除不兼容的 vendorsetup（旧格式会让 fox_16.0 envsetup 崩溃）
+          # 5f. 删除不兼容的 vendorsetup（crDroid 旧格式 + OrangeFox manifest 自带的其他设备）
           rm -f device/xiaomi/lmi/vendorsetup.sh
-          # 5e. product 注册
-          cat /tmp/sponmer/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
-          # 5f. TWRP 的 BoardConfig 段
-          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
-          # 5g. TWRP 依赖
-          cp /tmp/sponmer/twrp.dependencies device/xiaomi/lmi/ 2>/dev/null || true
-          # 5h. 删除其他设备的 vendorsetup（OrangeFox manifest 自带的 mondrian 等旧格式导致 envsetup css 崩溃）
           find device -name 'vendorsetup.sh' ! -path 'device/xiaomi/lmi/*' -delete 2>/dev/null || true
-          # 5i. 验证
-          echo "=== 补丁检查："
-          for f in twrp_lmi.mk prebuilt/kernel recovery/root/init.recovery.qcom.rc AndroidProducts.mk BoardConfig.mk; do
+          # 5g. product 注册（sponmer 的 twrp_lmi）
+          cat /tmp/sponmer/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
+          # 5h. TWRP 的 BoardConfig 段（sponmer 的 TW_*）
+          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
+          # 5i. TWRP FBE 解密（参考 umi A13 树）
+          echo 'BOARD_USES_QCOM_FBE_DECRYPTION := true' >> device/xiaomi/lmi/BoardConfig.mk
+          echo 'TARGET_RECOVERY_DEVICE_MODULES := libinit_lmi' >> device/xiaomi/lmi/BoardConfig.mk
+          # 5j. 去掉 vendor sepolicy 依赖（OrangeFox manifest 无 device/qcom/sepolicy_vndr）
+          sed -i '/device\/qcom\/sepolicy_vndr\/SEPolicy.mk/d' device/xiaomi/lmi/BoardConfig.mk
+          # 5k. 验证
+          echo "=== 设备树检查："
+          for f in twrp_lmi.mk prebuilt/kernel recovery/root/system/etc/recovery.fstab BoardConfig.mk; do
             [ -e "device/xiaomi/lmi/$f" ] && echo "  ✓ $f" || echo "  ✗ $f 缺失"
           done
           grep -c 'twrp_lmi' device/xiaomi/lmi/AndroidProducts.mk
-          [ -f device/xiaomi/lmi/vendorsetup.sh ] && echo "  ✗ vendorsetup.sh 仍存在" || echo "  ✓ vendorsetup.sh 已删除"
-          # 5j. 去掉 crDroid 的 vendor sepolicy 依赖（OrangeFox manifest 没有 device/qcom/sepolicy_vndr）
-          sed -i '/device\/qcom\/sepolicy_vndr\/SEPolicy.mk/d' device/xiaomi/lmi/BoardConfig.mk
-          # 5k. TWRP FBE 解密配置（参考 umi A13 TWRP 树）
-          echo 'BOARD_USES_QCOM_FBE_DECRYPTION := true' >> device/xiaomi/lmi/BoardConfig.mk
-          echo 'TARGET_RECOVERY_DEVICE_MODULES := libinit_lmi' >> device/xiaomi/lmi/BoardConfig.mk
-          echo "=== 补丁完成"
 
-      # ---------- 编译（标准，无补丁） ----------
+      # ============ 编译 ============
       - name: 6. 编译
         run: |
           cd /home/runner/build
@@ -167,11 +158,7 @@ jobs:
           ccache -z || true
 
           source build/envsetup.sh
-          echo "=== 可用 lunch 目标（lmi/twrp/lineage）："
-          lunch 2>&1 | grep -iE 'lmi|twrp|lineage' | head -20 || true
-
-          # 优先 twrp，其次 lineage（crDroid 的 product）
-          lunch twrp_lmi-bp2a-eng || lunch twrp_lmi-eng || lunch lineage_lmi-userdebug || lunch lineage_lmi-eng || lunch lineage_lmi
+          lunch twrp_lmi-eng || lunch twrp_lmi-userdebug || lunch twrp_lmi
           RC=0
           mka recoveryimage -j$(($(nproc) * 2)) || RC=$?
           ccache -s || true
@@ -180,8 +167,8 @@ jobs:
             exit "$RC"
           fi
 
-      # ---------- 产物 ----------
-      - name: 7. 复制产物
+      # ============ 产物 ============
+      - name: 7. 复制并上传
         run: |
           cd /home/runner/build
           mkdir -p /home/runner/output
@@ -189,7 +176,7 @@ jobs:
           ls -lh /home/runner/output/recovery.img
           file /home/runner/output/recovery.img
           md5sum /home/runner/output/recovery.img
-          OUT="lmi-recovery-$(date +%Y%m%d%H%M).img"
+          OUT="lmi-recovery-A16-$(date +%Y%m%d%H%M).img"
           mv /home/runner/output/recovery.img "/home/runner/output/$OUT"
           echo "OUT_NAME=$OUT" >> "$GITHUB_ENV"
 
@@ -200,13 +187,13 @@ jobs:
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
-      - name: 9. Release（统一上传到 prebuilt Release）
+      - name: 9. Release（统一 prebuilt Release）
         uses: softprops/action-gh-release@v2
         with:
           tag_name: prebuilt
           name: lmi recovery (builds + prebuilt assets)
           body: |
-            prebuilt 资源（kernel/dtbo/vendor）+ 每次编译产物
+            prebuilt 资源 + crDroid A16 树编译产物
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
