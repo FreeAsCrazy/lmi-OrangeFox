@@ -190,6 +190,11 @@ jobs:
             bootable/recovery/openaes/Android.mk
           grep -q 'Wno-error=deprecated-non-prototype' bootable/recovery/openaes/Android.mk
 
+          # 关闭振动（编译期开关）
+          grep -q 'TW_NO_HAPTICS := true' device/xiaomi/lmi/BoardConfig.mk || \
+            echo 'TW_NO_HAPTICS := true' >> device/xiaomi/lmi/BoardConfig.mk
+          sed -i 's/^TW_SUPPORT_INPUT_1_2_HAPTICS := true/TW_SUPPORT_INPUT_1_2_HAPTICS := false/' device/xiaomi/lmi/BoardConfig.mk
+
           # 加密自动检测
           sed -i 's/TW_USE_FSCRYPT_POLICY := 1/TW_USE_FSCRYPT_POLICY := 0/' device/xiaomi/lmi/BoardConfig.mk
 
