@@ -1,4 +1,4 @@
-name: 编译 lmi Recovery (crDroid A16 + TWRP)
+name: 编译 lmi Recovery (Sponmer 树)
 
 on:
   workflow_dispatch:
@@ -23,9 +23,9 @@ jobs:
         run: |
           export DEBIAN_FRONTEND=noninteractive
           PKGS="git-core gnupg flex bison build-essential zip curl zlib1g-dev \
-            libc6-dev-i386 libncurses-dev x11proto-core-dev libx11-dev \
-            libgl1-mesa-dev libxml2-utils xsltproc fontconfig python3 python3-pip \
-            openjdk-17-jdk bc g++-multilib gcc-multilib libssl-dev libelf-dev ccache rsync unzip"
+            libc6-dev-i386 lib32ncurses-dev x11proto-core-dev libx11-dev \
+            lib32z1-dev libgl1-mesa-dev libxml2-utils xsltproc unzip fontconfig \
+            python3 python3-pip bc g++-multilib gcc-multilib libssl-dev libelf-dev ccache rsync"
           sudo -E apt-get install -yq --no-install-recommends $PKGS || {
             sudo apt-get update
             sudo -E apt-get install -yq --no-install-recommends $PKGS
@@ -40,9 +40,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.ccache
-          key: ccache-lmi-cr-${{ github.run_id }}
+          key: ccache-lmi-sponmer-${{ github.run_id }}
           restore-keys: |
-            ccache-lmi-
+            ccache-lmi-sponmer-
 
       # ============ 同步源码 ============
       - name: 4. repo init + sync
@@ -75,12 +75,6 @@ jobs:
               grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
                 echo "  <remove-project path=\"$p\" />"
             done
-            # OrangeFox GitLab 已 404 的项目：libarchive/libfuse3 用 AOSP 源，fox-go 跳过
-            echo '  <remove-project path="external/libarchive" />'
-            echo '  <remove-project path="external/libfuse3" />'
-            echo '  <remove-project name="external/fox-go" />'
-            echo '  <project path="external/libarchive" name="platform/external/libarchive" remote="aosp" revision="refs/tags/android-16.0.0_r1" />'
-            echo '  <project path="external/libfuse3" name="platform/external/libfuse3" remote="aosp" revision="refs/tags/android-16.0.0_r1" />'
             echo '</manifest>'
           } > .repo/local_manifests/remove.xml
 
@@ -100,58 +94,20 @@ jobs:
           done
           df -h /
 
-      # ============ 设备树（Release 资源优先） ============
+      # ============ 设备树（Sponmer 参考） ============
       - name: 5. 放入设备树
         run: |
           cd /home/runner/build
-          mkdir -p device/xiaomi vendor/xiaomi
-          # 5a. crDroid A16 设备树（基础）
-          git clone --depth=1 -b 16.0 \
-            https://github.com/crdroidandroid/android_device_xiaomi_lmi.git \
-            device/xiaomi/lmi
-          # 5b. [Release] vendor blobs（刷机包提取）
-          curl -fsSL --retry 3 -o /tmp/vendor.tar.gz \
-            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/vendor_xiaomi_lmi.tar.gz"
-          tar -xzf /tmp/vendor.tar.gz -C vendor/
-          # 5c. [sponmer] TWRP product + recovery 配置
+          mkdir -p device/xiaomi
           git clone --depth=1 -b fox_12.1 \
-            https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git /tmp/sponmer
-          cp -r /tmp/sponmer/recovery device/xiaomi/lmi/
-          cp /tmp/sponmer/twrp_lmi.mk device/xiaomi/lmi/
-          # 5d. [Release] A16 recovery.fstab（crDroid 分区 + erofs）
-          curl -fsSL --retry 3 -o device/xiaomi/lmi/recovery/root/system/etc/recovery.fstab \
-            "https://raw.githubusercontent.com/FreeAsCrazy/lmi-recovery/main/prebuilt/recovery_A16.fstab"
-          # 5e. [Release] A16 内核 / dtbo（刷机包提取）
-          mkdir -p device/xiaomi/lmi/prebuilt
-          curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/kernel \
-            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/kernel"
-          curl -fsSL --retry 3 -o device/xiaomi/lmi/prebuilt/dtbo.img \
-            "https://github.com/FreeAsCrazy/lmi-recovery/releases/download/prebuilt/dtbo.img"
-          # 5f. [Scribe] 设备模块（bootctrl/gpt-utils，crDroid 树可能缺）
-          git clone --depth=1 -b fox-12.1 \
-            https://github.com/ScribeSavant/device_xiaomi_lmi-TWRP.git /tmp/scribe
-          cp -r /tmp/scribe/bootctrl device/xiaomi/lmi/ 2>/dev/null || true
-          cp -r /tmp/scribe/gpt-utils device/xiaomi/lmi/ 2>/dev/null || true
-          # 5g. 删除不兼容 vendorsetup（crDroid 旧格式 + OrangeFox manifest 自带的其他设备）
-          rm -f device/xiaomi/lmi/vendorsetup.sh
-          find device -name 'vendorsetup.sh' ! -path 'device/xiaomi/lmi/*' -delete 2>/dev/null || true
-          # 5h. product 注册（sponmer 的 twrp_lmi）
-          cat /tmp/sponmer/AndroidProducts.mk >> device/xiaomi/lmi/AndroidProducts.mk
-          # 5i. [sponmer] TWRP BoardConfig 段（TW_*）
-          grep -E '^(TW_|BOARD_RECOVERY|TARGET_RECOVERY|RECOVERY_)' /tmp/sponmer/BoardConfig.mk >> device/xiaomi/lmi/BoardConfig.mk 2>/dev/null || true
-          # 5j. TWRP FBE 解密（参考 umi A13 树）
-          echo 'BOARD_USES_QCOM_FBE_DECRYPTION := true' >> device/xiaomi/lmi/BoardConfig.mk
-          echo 'TARGET_RECOVERY_DEVICE_MODULES := libinit_lmi' >> device/xiaomi/lmi/BoardConfig.mk
-          # 5k. 去掉缺失的 vendor sepolicy / A16 不存在的 bootctrl 引用
-          sed -i '/device\/qcom\/sepolicy_vndr\/SEPolicy.mk/d' device/xiaomi/lmi/BoardConfig.mk
-          sed -i '/bootctrl\.xiaomi_sm8250/d' device/xiaomi/lmi/device.mk 2>/dev/null || true
-          sed -i '/hardware\/qcom\/bootctrl/d' device/xiaomi/lmi/Android.bp 2>/dev/null || true
-          # 5l. 验证
-          echo "=== 设备树检查（Release 资源优先）："
-          for f in twrp_lmi.mk prebuilt/kernel prebuilt/dtbo.img recovery/root/system/etc/recovery.fstab BoardConfig.mk bootctrl/Android.bp; do
-            [ -e "device/xiaomi/lmi/$f" ] && echo "  ✓ $f" || echo "  ✗ $f 缺失"
-          done
-          grep -c 'twrp_lmi' device/xiaomi/lmi/AndroidProducts.mk
+            https://github.com/Sponmer/orangefox_device_xiaomi_lmi.git \
+            device/xiaomi/lmi
+          echo "=== 设备树结构："
+          ls device/xiaomi/lmi
+          echo "=== AndroidProducts.mk："
+          cat device/xiaomi/lmi/AndroidProducts.mk
+          echo "=== twrp_lmi.mk 前 30 行："
+          head -30 device/xiaomi/lmi/twrp_lmi.mk
 
       # ============ 编译 ============
       - name: 6. 编译
@@ -194,13 +150,14 @@ jobs:
           path: /home/runner/output/${{ env.OUT_NAME }}
           retention-days: 30
 
-      - name: 9. Release（统一 prebuilt Release）
+      - name: 9. Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: prebuilt
-          name: lmi recovery (builds + prebuilt assets)
+          name: lmi recovery (Sponmer tree)
           body: |
-            prebuilt 资源 + crDroid A16 树编译产物
+            OrangeFox Recovery for lmi (Redmi K30 Pro / POCO F2 Pro)
+            设备树: Sponmer orangefox_device_xiaomi_lmi@fox_12.1
           files: /home/runner/output/${{ env.OUT_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
