@@ -54,6 +54,33 @@ jobs:
           sudo swapon /swapfile
           free -h
 
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+            bc bison build-essential ccache flex gperf imagemagick liblz4-tool libncurses-dev \
+            libssl-dev lzop pngcrush rsync schedtool zip zlib1g-dev
+          df -h /
+
+      - name: Install repo tool
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/bin"
+          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          chmod +x "$HOME/bin/repo"
+          echo "$HOME/bin" >> "$GITHUB_PATH"
+          "$HOME/bin/repo" --version || true
+
+      - name: Select JDK 11
+        run: |
+          set -euo pipefail
+          if [ -n "${JAVA_HOME_11_X64:-}" ] && [ -d "$JAVA_HOME_11_X64" ]; then
+            echo "JAVA_HOME=$JAVA_HOME_11_X64" >> "$GITHUB_ENV"
+            echo "$JAVA_HOME_11_X64/bin" >> "$GITHUB_PATH"
+          fi
+          java -version 2>&1 || true
+
       - name: Sync OrangeFox source
         run: |
           set -euo pipefail
