@@ -43,6 +43,7 @@ mka recoveryimage -j$(($(nproc) * 2))
 > - `PRODUCT_SHIPPING_API_LEVEL := 36`；lunch 走三段式 `twrp_lmi-bp2a-eng`
 > - 源码侧兜底 `AID_MEDIA_RW`、修 openaes 的 K&R 旧式 C 警告升级
 > - `bootable/recovery` 下所有 C 模块退回 `-std=gnu99`（A16 clang 默认 C23，K&R 定义与 `foo()` 语义都变了）
+> - **lmi 是 64 位纯设备**：`BoardConfig.mk` 已删掉 `TARGET_2ND_ARCH` 并置 `TARGET_SUPPORTS_32_BIT_APPS := false`，不再产出 armeabi-v7a 变体（省掉约两成编译目标）
 
 ## 刷入（lmi 为 A-only 设备，有独立 recovery 分区）
 
