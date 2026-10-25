@@ -128,67 +128,12 @@ jobs:
           echo "=== 打补丁后的 sync 命令 ==="
           grep -n 'repo sync' orangefox_sync.sh
 
-          # ---- 在 repo init 与 repo sync 之间插入「按前缀剔除无关项目」 ----
-          # 12.1 用的是 TWRP 的 minimal manifest，看着精简，实际仍有 1061 个项目，
-          # 其中 83 个与 recovery 无关（cts/sdk/developers、device/generic/*、
-          # device/google/*、device/linaro|ti|amlogic/*、14 个 kernel/prebuilts/*
-          # GKI 预编译内核、prebuilts/{android-emulator,qemu-kernel}）。
-          cat > "$HOME/prune_repo.py" <<'PYEOF'
-          import os, pathlib, re, subprocess, sys
-          tree = sys.argv[1]
-          out = "/tmp/prune_manifest.xml"
-          subprocess.run(["repo", "manifest", "-o", out], cwd=tree,
-                         capture_output=True, text=True)
-          txt = pathlib.Path(out).read_text(errors="replace") if os.path.exists(out) else ""
-          paths = set(re.findall(r'<project\b[^>]*\bpath="([^"]+)"', txt))
-          PREFIX = ("cts", "sdk",
-                    "developers/",
-                    "device/generic/", "device/google/", "device/amlogic/",
-                    "device/asus/", "device/brcm/", "device/linaro/",
-                    "device/ti/", "device/sample/",
-                    "kernel/prebuilts",
-                    "prebuilts/android-emulator", "prebuilts/qemu-kernel")
-          TEST_EXACT = {
-              "test/dittosuite", "test/robolectric-extensions",
-              "test/mlts/benchmark", "test/mlts/models",
-              "test/cts-root", "test/mts", "test/suite_harness",
-              "test/vts", "test/catbox",
-              "test/vts-testcase/hal", "test/vts-testcase/kernel",
-              "test/vts-testcase/nbu", "test/vts-testcase/performance",
-              "test/vts-testcase/security", "test/vts-testcase/vndk",
-          }
-          def hit(p):
-              if p in TEST_EXACT:
-                  return True
-              for x in PREFIX:
-                  if p == x:
-                      return True
-                  if x.endswith("/") and p.startswith(x):
-                      return True
-                  if not x.endswith("/") and p.startswith(x + "/"):
-                      return True
-              return False
-          killed = sorted(p for p in paths if hit(p))
-          d = pathlib.Path(tree, ".repo", "local_manifests")
-          d.mkdir(parents=True, exist_ok=True)
-          (d / "remove.xml").write_text(
-              "<manifest>\n" + "".join('  <remove-project path="%s" />\n' % p for p in killed)
-              + "</manifest>\n")
-          print("== 12.1 清单共 %d 个项目，自动剔除 %d 个 ==" % (len(paths), len(killed)))
-          PYEOF
-
-          python3 - <<'PYEOF'
-          import pathlib
-          p = pathlib.Path("orangefox_sync.sh")
-          s = p.read_text()
-          anchor = '  echo "-- Syncing the $TWRP_BRANCH minimal manifest repo ...";'
-          if s.count(anchor) == 1:
-              s = s.replace(anchor, '  python3 "$HOME/prune_repo.py" "$PWD" || true;\n' + anchor, 1)
-              p.write_text(s)
-              print("已在 repo init 与 repo sync 之间插入剔除步骤")
-          else:
-              print("!!! 未找到锚点，跳过剔除注入（不影响编译，只是不省同步量）")
-          PYEOF
+          # 注意：这里**不做**项目剔除。
+          # 实测 12.1 的真实清单只有 247 个项目（TWRP minimal manifest），
+          # 按前缀只命中 3 个，而其中 test/vts-testcase/hal 是 A12 的
+          # assemble_vintf 要链接的 libvts_vintf_test_common 所在项目 ——
+          # 删掉会让 host 工具链接失败（本轮已踩，10 分钟就挂）。
+          # 收益≈0、风险真实，所以 12.1 只保留并发/缓存/日志优化。
           # 同步失败（网络抖动/半途补丁）就清空目标目录重来：补丁不重复应用，
           # 而 twrp-12.1 是浅克隆 + 最小 manifest，重来只多花约 5 分钟
           ok=false
