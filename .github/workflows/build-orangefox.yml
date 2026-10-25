@@ -1,6 +1,7 @@
 name: Build OrangeFox
 
-# 手动触发构建最新橙狐 Recovery（设备树：Xiaomi lmi / POCO F2 Pro）
+# 手动触发构建橙狐 Recovery（设备：Xiaomi lmi / POCO F2 Pro）
+# 工作流中的加固手法参考 FreeAsCrazy/lmi-recovery 的 build-lmi-recovery.yml
 on:
   workflow_dispatch:
     inputs:
@@ -16,6 +17,7 @@ on:
 permissions:
   contents: read
 
+# 同仓库同一时刻只跑一个构建，新触发排队而不打断进行中的编译
 concurrency:
   group: orangefox-build
   cancel-in-progress: false
@@ -24,12 +26,17 @@ env:
   FOX_BRANCH: ${{ github.event.inputs.fox_branch || '12.1' }}
   BUILD_TARGET: ${{ github.event.inputs.build_target || 'twrp_lmi-eng' }}
   FOX_DIR: /home/runner/fox_12.1
+  # ---- AOSP 构建环境调优 ----
+  ALLOW_MISSING_DEPENDENCIES: "true"  # recovery 构建允许缺失的非必需依赖（测试套件等）
+  GOMEMLIMIT: 12GiB                   # 压住 soong(Go) 分析 Android.bp 的内存峰值
+  LC_ALL: C                           # 统一排序/工具链输出，避免 locale 差异
 
 jobs:
   build:
     name: Sync & Build
-    runs-on: ubuntu-latest
-    timeout-minutes: 330
+    # 固定 24.04：ubuntu-latest 会随时间滚动；22.04 已进入退役倒计时（2027-04）
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
 
     steps:
       - name: Checkout device tree
@@ -47,34 +54,51 @@ jobs:
 
       - name: Add swap
         run: |
+          # 7G 物理内存 + 24G swap：lunch/kati 阶段内存峰值高，参考上游的 24G 配置
           sudo swapoff -a 2>/dev/null || true
-          sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+          sudo fallocate -l 24G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=24576
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile >/dev/null
           sudo swapon /swapfile
           free -h
+          df -h /
 
       - name: Install dependencies
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-            bc bison build-essential ccache flex gperf imagemagick liblz4-tool libncurses-dev \
-            libssl-dev lzop pngcrush rsync schedtool zip zlib1g-dev
+          PKGS="bc bison build-essential ccache flex gperf imagemagick liblz4-tool \
+                 libncurses-dev libssl-dev lzop pngcrush rsync schedtool zip zlib1g-dev"
+          # apt 索引过期/网络抖动时 install 会失败：update 后重试一次
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $PKGS || {
+            sudo apt-get update -qq
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $PKGS
+          }
+          # noble 移除了 libncurses5/libtinfo5，部分 AOSP prebuilt clang 仍链 libtinfo.so.5；
+          # 从 focal 池补装（best-effort，404 或冲突都不阻断构建）
+          N=6.2-0ubuntu2.1
+          for P in libtinfo5 libncurses5; do
+            curl -fsSL --retry 3 -O "http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/${P}_${N}_amd64.deb" || continue
+            sudo dpkg -i "${P}_${N}_amd64.deb" || true
+            rm -f "${P}_${N}_amd64.deb"
+          done
           df -h /
 
       - name: Install repo tool
         run: |
           set -euo pipefail
           mkdir -p "$HOME/bin"
-          curl -fsSL https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
+          curl -fsSL --retry 3 https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
+          # repo 的部分操作会读取 git 身份，先配好避免探测失败
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
           "$HOME/bin/repo" --version || true
 
       - name: Select JDK 11
         run: |
           set -euo pipefail
+          # AOSP 12.1 需要 JDK 11（runner 默认 17），优先用镜像自带的 11 号 JDK
           if [ -n "${JAVA_HOME_11_X64:-}" ] && [ -d "$JAVA_HOME_11_X64" ]; then
             echo "JAVA_HOME=$JAVA_HOME_11_X64" >> "$GITHUB_ENV"
             echo "$JAVA_HOME_11_X64/bin" >> "$GITHUB_PATH"
@@ -84,11 +108,27 @@ jobs:
       - name: Sync OrangeFox source
         run: |
           set -euo pipefail
-          mkdir -p "$HOME/OrangeFox_sync"
-          git clone --depth 1 https://gitlab.com/OrangeFox/sync.git "$HOME/OrangeFox_sync/sync"
-          cd "$HOME/OrangeFox_sync/sync"
+          SYNC_DIR="$HOME/OrangeFox_sync/sync"
+          if [ ! -d "$SYNC_DIR/.git" ]; then
+            mkdir -p "$HOME/OrangeFox_sync"
+            git clone --depth 1 https://gitlab.com/OrangeFox/sync.git "$SYNC_DIR"
+          fi
+          cd "$SYNC_DIR"
           chmod +x orangefox_sync.sh
-          ./orangefox_sync.sh --branch "$FOX_BRANCH" --path "$FOX_DIR"
+          # 同步失败（网络抖动/半途补丁）就清空目标目录重来：补丁不重复应用，
+          # 而 twrp-12.1 是浅克隆 + 最小 manifest，重来只多花约 5 分钟
+          ok=false
+          for i in 1 2 3; do
+            rm -rf "$FOX_DIR"
+            if ./orangefox_sync.sh --branch "$FOX_BRANCH" --path "$FOX_DIR"; then
+              ok=true
+              break
+            fi
+            echo "=== 第 $i 次同步失败，20 秒后重试 ==="
+            sleep 20
+          done
+          [ "$ok" = true ]
+          test -f "$FOX_DIR/build/envsetup.sh"
           df -h /
 
       - name: Place device tree
@@ -97,22 +137,64 @@ jobs:
           DEST="$FOX_DIR/device/xiaomi/lmi"
           mkdir -p "$DEST"
           rm -rf "$DEST"
-          if command -v rsync >/dev/null 2>&1; then
-            rsync -a --exclude='.git' "$GITHUB_WORKSPACE/" "$DEST/"
-          else
-            cp -a "$GITHUB_WORKSPACE/." "$DEST/"
-            rm -rf "$DEST/.git"
-          fi
+          rsync -a --exclude='.git' "$GITHUB_WORKSPACE/" "$DEST/"
+          rm -rf "$DEST/.git"
           ls -la "$DEST"
-          grep OF_MAINTAINER "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh"
+          grep OF_MAINTAINER "$DEST/vendorsetup.sh"
+          test -f "$DEST/prebuilt/kernel"
+
+      - name: Restore ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          # key 每轮必 miss，靠 restore-keys 回源最近一次缓存；post 阶段再存一份新的
+          key: ccache-${{ github.run_id }}
+          restore-keys: |
+            ccache-
 
       - name: Build recovery image
         run: |
-          set -euo pipefail
-          cd "$FOX_DIR"
-          source build/envsetup.sh
-          lunch "$BUILD_TARGET"
-          mka recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          # 注意：这里绝对不能加 -u（nounset）——AOSP build/envsetup.sh 会引用未定义的 TOP，
+          # 上一轮就是被 "TOP: unbound variable" 直接打断的。
+          cd "$FOX_DIR" || exit 1
+
+          # 内存守护：每 30 秒打一张内存快照，runner 若被宿主 OOM 回收可在日志留证
+          ( while true; do
+              echo "[$(date +%H:%M:%S)] $(free -h | awk '/^Mem:/{print "mem_used="$3" mem_avail="$4} /^Swap:/{print "swap_used="$3}')"
+              sleep 30
+            done ) &
+          WATCHDOG=$!
+          trap 'kill "$WATCHDOG" 2>/dev/null || true' EXIT
+
+          free -h
+          df -h /
+
+          source build/envsetup.sh || { echo "!!! envsetup.sh 执行失败"; exit 1; }
+          lunch "$BUILD_TARGET" || { echo "!!! lunch 失败: $BUILD_TARGET"; exit 1; }
+
+          export USE_CCACHE=1
+          export CCACHE_DIR="$HOME/.ccache"
+          if command -v ccache >/dev/null 2>&1; then
+            ccache -M 7G
+            ccache -o compression=true
+            ccache -z
+          fi
+
+          # mka 是 Lineage/TWRP 侧的封装，AOSP 原生 envsetup 只提供 m；缺哪个换哪个
+          if command -v mka >/dev/null 2>&1; then
+            BUILD_CMD=mka
+          else
+            BUILD_CMD=m
+          fi
+          echo "使用编译命令: $BUILD_CMD recoveryimage"
+          "$BUILD_CMD" recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          RC=${PIPESTATUS[0]}
+          ccache -s || true
+          if [ "$RC" -ne 0 ]; then
+            echo "===== 编译失败（exit=$RC），日志最后 80 行 ====="
+            tail -80 "$GITHUB_WORKSPACE/build.log" || true
+            exit "$RC"
+          fi
 
       - name: Collect artifacts
         if: always()
@@ -120,12 +202,22 @@ jobs:
           set -uo pipefail
           mkdir -p dist
           OUT="$FOX_DIR/out/target/product/lmi"
+          if [ -f "$OUT/recovery.img" ]; then
+            VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
+                  "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1)
+            [ -z "$VER" ] && VER="$FOX_BRANCH"
+            NAME="OrangeFox-${VER}-lmi-$(date +%Y%m%d).img"
+            cp -v "$OUT/recovery.img" "dist/$NAME"
+            echo "文件名: $NAME"
+          fi
           if [ -d "$OUT" ]; then
-            find "$OUT" -maxdepth 1 \( -name 'recovery.img' -o -name '*.zip' -o -name '*.tar*' \) \
+            find "$OUT" -maxdepth 1 \( -name '*.zip' -o -name '*.tar*' \) \
                  -exec cp -v {} dist/ \;
           fi
           echo "=== 产物 ==="
           ls -lh dist/ || true
+          ( cd dist && md5sum * ) 2>/dev/null || true
+          file dist/* 2>/dev/null || true
           if [ -f "$GITHUB_WORKSPACE/build.log" ]; then
             cp "$GITHUB_WORKSPACE/build.log" dist/build.log
           fi
