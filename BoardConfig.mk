@@ -15,11 +15,14 @@ TARGET_ARCH_VARIANT := armv8-2a
 TARGET_CPU_ABI := arm64-v8a
 TARGET_CPU_VARIANT := cortex-a76
 
-TARGET_2ND_ARCH := arm
-TARGET_2ND_ARCH_VARIANT := armv8-a
-TARGET_2ND_CPU_ABI := armeabi-v7a
-TARGET_2ND_CPU_ABI2 := armeabi
-TARGET_2ND_CPU_VARIANT := cortex-a76
+# lmi 是 64 位纯设备：官方 ROM、本树的 recovery/root/vendor 都只有 lib64，没有 lib。
+# 原先这里声明了 32 位第二架构（TARGET_2ND_ARCH := arm），构建系统会为每个
+# multilib 模块额外编一份 32 位变体 —— 对本设备纯属浪费（A16 全量 28773 个目标里
+# 约三分之一是 32 位）。去掉第二架构后：
+#   - 不再产出 armeabi-v7a 变体；recovery 本身仍是 64 位（TARGET_ARCH=arm64 不变）
+#   - 万一真有模块硬要 32 位，会直接报错暴露出来，而不是静默编一堆用不上的东西
+# 如需恢复：把 TARGET_2ND_ARCH / _VARIANT / _CPU_ABI / _CPU_ABI2 / _CPU_VARIANT 加回来即可。
+TARGET_SUPPORTS_32_BIT_APPS := false
 
 TARGET_BOARD_SUFFIX := _64
 TARGET_USES_64_BIT_BINDER := true
