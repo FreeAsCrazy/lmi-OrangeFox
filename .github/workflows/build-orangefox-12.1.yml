@@ -221,20 +221,23 @@ jobs:
           mkdir -p dist
           OUT="$FOX_DIR/out/target/product/lmi"
           if [ -f "$OUT/recovery.img" ]; then
+            # grep 找不到版本号会返回 1，本步是 pipefail + 默认 -e，
+            # 直接赋值会把整步打死（上一轮 12.1 正是死在这里）→ 必须吞掉
             VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
-                  "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1)
-            [ -z "$VER" ] && VER="$FOX_BRANCH"
+                  "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1) || VER=""
+            if [ -z "$VER" ]; then VER="$FOX_BRANCH"; fi
             NAME="OrangeFox-${VER}-lmi-$(date +%Y%m%d).img"
             cp -v "$OUT/recovery.img" "dist/$NAME"
             echo "文件名: $NAME"
           fi
           if [ -d "$OUT" ]; then
-            find "$OUT" -maxdepth 1 \( -name '*.zip' -o -name '*.tar*' \) \
-                 -exec cp -v {} dist/ \;
+            # 顺带把 OrangeFox 自己打包的成品（签名 zip / 成品 img / md5）也收进来
+            find "$OUT" -maxdepth 1 \( -name '*.zip' -o -name '*.tar*' -o -name 'OrangeFox-*' \) \
+                 -exec cp -v {} dist/ \; || true
           fi
           echo "=== 产物 ==="
           ls -lh dist/ || true
-          ( cd dist && md5sum * ) 2>/dev/null || true
+          ( cd dist && md5sum ./* ) 2>/dev/null || true
           file dist/* 2>/dev/null || true
           if [ -f "$GITHUB_WORKSPACE/build.log" ]; then
             cp "$GITHUB_WORKSPACE/build.log" dist/build.log

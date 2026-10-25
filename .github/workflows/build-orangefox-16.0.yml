@@ -227,12 +227,59 @@ jobs:
           echo "AID_MEDIA_RW 兜底完成：$patched 个文件"
           grep -q '#define AID_MEDIA_RW 1023' bootable/recovery/partitionmanager.cpp
 
-          # 2) openaes 是 K&R 旧式 C 代码，A16 的 clang 默认把 deprecated-non-prototype 升级成错误
+          # 2) A16 的 clang 默认 -std=gnu23（soong cc/config/global.go: CStdVersion = "gnu23"），
+          #    而 C23 里 K&R 旧式函数定义已删除、`foo()` 变成「无参数」——
+          #    openaes 是 2008 年的 K&R 代码（rand.c:28 `void isaac(ctx)`、oaes_lib.c 调 `foo()`），
+          #    直接编不过。用构建系统的一等开关 LOCAL_C_STD 退回 gnu99（binary.mk:473-479），
+          #    比往 LOCAL_CFLAGS 里硬塞 -std= 可靠。
           if [ -f bootable/recovery/openaes/Android.mk ]; then
-            sed -i 's/LOCAL_CFLAGS:= -g -c -W/LOCAL_CFLAGS:= -g -c -W -std=gnu99 -Wno-error=deprecated-non-prototype/' \
-              bootable/recovery/openaes/Android.mk
-            grep -q 'Wno-error=deprecated-non-prototype' bootable/recovery/openaes/Android.mk
+            # 先把 `LOCAL_CFLAGS:=` 改成 `+=`，否则注入的 -Wno-* 会被这一行整体覆盖
+            sed -i 's/^\(\t*\)LOCAL_CFLAGS:= /\1LOCAL_CFLAGS += /' bootable/recovery/openaes/Android.mk
+            python3 - <<'PYEOF'
+          p = "bootable/recovery/openaes/Android.mk"
+          s = open(p).read()
+          ins = ("\tLOCAL_C_STD := gnu99\n"
+                 "\tLOCAL_CFLAGS += -Wno-deprecated-non-prototype"
+                 " -Wno-error=implicit-function-declaration"
+                 " -Wno-error=int-conversion"
+                 " -Wno-error=incompatible-function-pointer-types\n")
+          n = s.count("include $(CLEAR_VARS)")
+          assert n >= 3, "openaes/Android.mk 段数异常: %d" % n
+          s = s.replace("include $(CLEAR_VARS)", "include $(CLEAR_VARS)\n" + ins)
+          open(p, "w").write(s)
+          print("openaes: 注入 gnu99 x", n)
+          PYEOF
+            grep -q 'LOCAL_C_STD := gnu99' bootable/recovery/openaes/Android.mk
+            grep -q 'Wno-deprecated-non-prototype' bootable/recovery/openaes/Android.mk
+            grep -q 'LOCAL_CFLAGS += -g -c -W' bootable/recovery/openaes/Android.mk
           fi
+
+          # 2b) recovery 目录下其余老 C 代码（libtar / blkid / fts / ...）同样按 gnu99 编，
+          #     免得一个模块一个模块地去撞 C23 的墙。
+          #     global 的 -std= 在编译命令里排在 LOCAL_CFLAGS 之前（definitions.mk:1656-1660），
+          #     这里直接改 DEFAULT 解析结果，整目录一次到位。
+          python3 - <<'PYEOF'
+          p = "build/make/core/binary.mk"
+          s = open(p).read()
+          old = ("ifeq ($(LOCAL_C_STD),)\n"
+                 "    my_c_std_version := $(DEFAULT_C_STD_VERSION)\n"
+                 "else ifeq ($(LOCAL_C_STD),experimental)\n"
+                 "    my_c_std_version := $(EXPERIMENTAL_C_STD_VERSION)\n"
+                 "else\n"
+                 "    my_c_std_version := $(LOCAL_C_STD)\n"
+                 "endif\n")
+          assert s.count(old) == 1, "binary.mk 的 C_STD 解析块与预期不符"
+          new = old + ("\n# OrangeFox: recovery 下多为老式 C 代码，A16 默认 gnu23 编不过 -> 退回 gnu99\n"
+                       "ifneq (,$(filter bootable/recovery bootable/recovery/%,$(LOCAL_PATH)))\n"
+                       "  ifeq ($(LOCAL_C_STD),)\n"
+                       "    my_c_std_version := gnu99\n"
+                       "  endif\n"
+                       "endif\n")
+          s = s.replace(old, new, 1)
+          open(p, "w").write(s)
+          print("binary.mk: bootable/recovery 默认 gnu99 已注入")
+          PYEOF
+          grep -q 'bootable/recovery bootable/recovery/%' build/make/core/binary.mk
 
           # 3) 清单已移除 test/vts*，但 build/make 的 test-suite 展开仍引用 vts/tvts
           if grep -q 'device-tests vts tvts art-host-tests' build/make/core/main.mk; then
@@ -347,20 +394,23 @@ jobs:
           mkdir -p dist
           OUT="$FOX_DIR/out/target/product/lmi"
           if [ -f "$OUT/recovery.img" ]; then
+            # grep 找不到版本号会返回 1，本步是 pipefail + 默认 -e，
+            # 直接赋值会把整步打死（上一轮 12.1 就死在这里）→ 必须吞掉
             VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
-                  "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1)
-            [ -z "$VER" ] && VER="16.0"
+                  "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1) || VER=""
+            if [ -z "$VER" ]; then VER="16.0"; fi
             NAME="OrangeFox-${VER}-lmi-$(date +%Y%m%d).img"
             cp -v "$OUT/recovery.img" "dist/$NAME"
             echo "文件名: $NAME"
           fi
           if [ -d "$OUT" ]; then
-            find "$OUT" -maxdepth 1 \( -name '*.zip' -o -name '*.tar*' \) \
-                 -exec cp -v {} dist/ \;
+            # 顺带把 OrangeFox 自己打包的成品（签名 zip / 成品 img / md5）也收进来
+            find "$OUT" -maxdepth 1 \( -name '*.zip' -o -name '*.tar*' -o -name 'OrangeFox-*' \) \
+                 -exec cp -v {} dist/ \; || true
           fi
           echo "=== 产物 ==="
           ls -lh dist/ || true
-          ( cd dist && md5sum * ) 2>/dev/null || true
+          ( cd dist && md5sum ./* ) 2>/dev/null || true
           file dist/* 2>/dev/null || true
           if [ -f "$GITHUB_WORKSPACE/build.log" ]; then
             cp "$GITHUB_WORKSPACE/build.log" dist/build.log
