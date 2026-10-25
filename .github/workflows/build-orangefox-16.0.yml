@@ -254,10 +254,16 @@ jobs:
             grep -q 'LOCAL_CFLAGS += -g -c -W' bootable/recovery/openaes/Android.mk
           fi
 
-          # 2b) recovery 目录下其余老 C 代码（libtar / blkid / fts / ...）同样按 gnu99 编，
-          #     免得一个模块一个模块地去撞 C23 的墙。
-          #     global 的 -std= 在编译命令里排在 LOCAL_CFLAGS 之前（definitions.mk:1656-1660），
-          #     这里直接改 DEFAULT 解析结果，整目录一次到位。
+          # 2b) recovery 目录下还有十来个 2010 年前的老 C 模块（libtar/dosfstools/libblkid/
+          #     pigz/flashutils/mtdutils/attr/...），和 openaes 一样都是 K&R 时代的产物。
+          #     光修 openaes 等于打地鼠，这里给整个目录一次到位：
+          #       - 默认 C 标准退回 gnu99（C23 删掉了 K&R 定义、`foo()` 变 (void)）
+          #       - 关掉会因全局 -Werror 而致命的旧代码警告
+          #     警告只挂到 conlyflags（.c 专用）：挂到 cflags 会落到 C++ 文件上，
+          #     而 `-Wno-deprecated-non-prototype` 对 clang++ 是未知告警选项，-Werror 下反成新错误。
+          #     global 的 -std=/-Werror 在编译命令里排在模块 flags 之前
+          #     （definitions.mk:1652-1661 → $(GLOBAL...) 在 $(PRIVATE_CFLAGS/CONLYFLAGS) 前面），
+          #     所以这里后加的会覆盖生效。
           python3 - <<'PYEOF'
           p = "build/make/core/binary.mk"
           s = open(p).read()
@@ -269,17 +275,23 @@ jobs:
                  "    my_c_std_version := $(LOCAL_C_STD)\n"
                  "endif\n")
           assert s.count(old) == 1, "binary.mk 的 C_STD 解析块与预期不符"
-          new = old + ("\n# OrangeFox: recovery 下多为老式 C 代码，A16 默认 gnu23 编不过 -> 退回 gnu99\n"
-                       "ifneq (,$(filter bootable/recovery bootable/recovery/%,$(LOCAL_PATH)))\n"
-                       "  ifeq ($(LOCAL_C_STD),)\n"
-                       "    my_c_std_version := gnu99\n"
-                       "  endif\n"
-                       "endif\n")
+          new = old + (
+              "\n# OrangeFox: recovery 下多为老式 C 代码，A16 默认 gnu23 编不过 -> 退回 gnu99\n"
+              "ifneq (,$(filter bootable/recovery bootable/recovery/%,$(LOCAL_PATH)))\n"
+              "  ifeq ($(LOCAL_C_STD),)\n"
+              "    my_c_std_version := gnu99\n"
+              "  endif\n"
+              "  my_conlyflags += -Wno-deprecated-non-prototype"
+              " -Wno-error=implicit-function-declaration"
+              " -Wno-error=int-conversion"
+              " -Wno-error=incompatible-function-pointer-types\n"
+              "endif\n")
           s = s.replace(old, new, 1)
           open(p, "w").write(s)
-          print("binary.mk: bootable/recovery 默认 gnu99 已注入")
+          print("binary.mk: bootable/recovery -> gnu99 + 旧 C 代码告警放行")
           PYEOF
           grep -q 'bootable/recovery bootable/recovery/%' build/make/core/binary.mk
+          grep -q 'my_conlyflags += -Wno-deprecated-non-prototype' build/make/core/binary.mk
 
           # 3) 清单已移除 test/vts*，但 build/make 的 test-suite 展开仍引用 vts/tvts
           if grep -q 'device-tests vts tvts art-host-tests' build/make/core/main.mk; then
@@ -324,9 +336,12 @@ jobs:
           # 注意：这里绝对不能加 -u（nounset）——AOSP build/envsetup.sh 会引用未定义的 TOP
           cd "$FOX_DIR" || exit 1
 
-          # 内存守护：每 30 秒打一张内存快照，runner 被宿主 OOM 回收时日志里可留证
+          # 内存守护：每 30 秒打一张内存快照 + top5 RSS 进程，
+          # runner 被宿主 OOM 回收时日志里可留证
           ( while true; do
               echo "[$(date +%H:%M:%S)] $(free -h | awk '/^Mem:/{print "mem_used="$3" mem_avail="$4} /^Swap:/{print "swap_used="$3}')"
+              ps -eo rss,comm --sort=-rss | head -6 | tail -5 \
+                | awk '{printf "  rss=%dMB %s\n", $1/1024, $2}'
               sleep 30
             done ) &
           WATCHDOG=$!
@@ -353,6 +368,17 @@ jobs:
             exit 1
           fi
           echo "envsetup 返回码: $ENV_RC（lunch 可用，继续）"
+
+          # OrangeFox 在 A16 上的实测开关（取自 FreeAsCrazy/lmi-recovery 的
+          # build-lmi-recovery.yml）：
+          #   SKIP_ABI_CHECKS —— 预编译 ELF 的 ABI/VNDK 校验对 recovery 无意义，放行
+          #   FOX_BUGGED_AOSP_ARB_WORKAROUND —— Android 12+ AVB 回滚计数的「闰年」bug，
+          #                       不设的话 patch-vbmeta 会算出错误的时间戳
+          #   FOX_RECOVERY_*_PARTITION —— A16 动态分区下 fox 挂载 system/vendor 的映射名
+          export SKIP_ABI_CHECKS=true
+          export FOX_BUGGED_AOSP_ARB_WORKAROUND="1588606644"
+          export FOX_RECOVERY_SYSTEM_PARTITION="/dev/block/mapper/system"
+          export FOX_RECOVERY_VENDOR_PARTITION="/dev/block/mapper/vendor"
 
           # A16 三段式 lunch：release 用 bp2a（vendor/twrp/vars/aosp_target_release）
           lunch "$BUILD_TARGET" \
