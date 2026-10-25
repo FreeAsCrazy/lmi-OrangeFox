@@ -195,6 +195,8 @@ jobs:
           if command -v ccache >/dev/null 2>&1; then
             ccache -M 7G
             ccache -o compression=true
+            # 源码里大量 __DATE__/__TIME__，默认会让命中率归零；跨 run 复用必须放行
+            ccache -o sloppiness=time_macros,file_stat_matches
             ccache -z
           fi
 
@@ -204,10 +206,13 @@ jobs:
           else
             BUILD_CMD=m
           fi
-          echo "使用编译命令: $BUILD_CMD recoveryimage"
-          "$BUILD_CMD" recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          echo "使用编译命令: $BUILD_CMD recoveryimage -j$(($(nproc) * 2))"
+          BUILD_START=$(date +%s)
+          "$BUILD_CMD" recoveryimage -j$(($(nproc) * 2)) 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           RC=${PIPESTATUS[0]}
           ccache -s || true
+          echo "=== 编译耗时: $(( ($(date +%s) - BUILD_START) / 60 )) 分钟 ==="
+          echo "=== ninja 目标总数: $(grep -oP '/\d+\]' "$GITHUB_WORKSPACE/build.log" | head -1) ==="
           if [ "$RC" -ne 0 ]; then
             echo "===== 编译失败（exit=$RC），日志最后 80 行 ====="
             tail -80 "$GITHUB_WORKSPACE/build.log" || true
