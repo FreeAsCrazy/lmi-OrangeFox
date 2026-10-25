@@ -266,6 +266,66 @@ jobs:
             cp "$GITHUB_WORKSPACE/build.log" dist/build.log
           fi
 
+      - name: 校验产物（镜像结构 + A16 关键能力）
+        if: always()
+        run: |
+          set -uo pipefail
+          IMG="$FOX_DIR/out/target/product/lmi/recovery.img"
+          if [ ! -f "$IMG" ]; then
+            echo "没有 recovery.img（编译未产出），跳过校验"
+            exit 0
+          fi
+          # 把「下载产物回本地开刀」这件事搬进 CI：结构性问题直接判失败，
+          # 字符串类只打印不判死（不同 fox 版本的嵌入方式不一样）。
+          python3 - "$IMG" <<'PYEOF'
+          import gzip, struct, sys
+          d = open(sys.argv[1], "rb").read()
+          ok = True
+          def chk(cond, msg):
+              global ok
+              print(("  [OK]   " if cond else "  [FAIL] ") + msg)
+              if not cond:
+                  ok = False
+          chk(d[:8] == b"ANDROID!", "boot 头 magic = ANDROID!")
+          g = lambda o: struct.unpack_from("<I", d, o)[0]
+          ks, rs, page, hver, osv = g(8), g(16), g(36), g(40), g(44)
+          print(f"  header_version={hver} page_size={page} "
+                f"kernel={ks/1048576:.1f}MB ramdisk={rs/1048576:.1f}MB")
+          chk(page in (2048, 4096, 8192, 16384), f"page_size 合法（{page}）")
+          chk(hver in (0, 1, 2, 3, 4), f"header_version 合法（{hver}）")
+          A, B, C = (osv >> 25) & 0x7f, (osv >> 20) & 0x1f, (osv >> 14) & 0x3f
+          print(f"  os_version={A}.{B}.{C}")
+          roff = page + (ks + page - 1) // page * page
+          rd = d[roff:roff + rs]
+          chk(rd[:2] == b"\x1f\x8b", "ramdisk 是 gzip")
+          out = gzip.decompress(rd)
+          print(f"  ramdisk 解压后 {len(out)/1048576:.1f}MB")
+          i, files = 0, {}
+          while i + 110 <= len(out) and out[i:i+6] == b"070701":
+              namesize = int(out[i+94:i+102], 16)
+              filesize = int(out[i+54:i+62], 16)
+              name = out[i+110:i+110+namesize-1].decode(errors="replace")
+              hsz = (110 + namesize + 3) // 4 * 4
+              files[name] = (filesize, i + hsz)
+              if name == "TRAILER!!!":
+                  break
+              i = i + hsz + (filesize + 3) // 4 * 4
+          chk("system/bin/recovery" in files, "ramdisk 里有 system/bin/recovery")
+          fstab = files.get("system/etc/recovery.fstab")
+          if fstab:
+              txt = out[fstab[1]:fstab[1] + fstab[0]].decode(errors="replace")
+              chk("erofs" in txt, "recovery.fstab 里支持 erofs（A16 的 system 格式）")
+          rec = files.get("system/bin/recovery")
+          if rec:
+              blob = out[rec[1]:rec[1] + rec[0]]
+              print(f"  recovery 二进制 {rec[0]/1048576:.1f}MB")
+              print(f"  [信息] 含维护者串 opencode: {b'opencode' in blob}")
+              print(f"  [信息] 含 of_maintainer 键:  {b'of_maintainer' in blob}")
+              print(f"  [信息] 含默认语言 zh_CN:     {b'zh_CN' in blob}")
+          print("\n校验结论：" + ("通过" if ok else "有问题（见上面 [FAIL]）"))
+          sys.exit(0 if ok else 1)
+          PYEOF
+
       - name: 上传产物
         if: always()
         uses: actions/upload-artifact@v4
