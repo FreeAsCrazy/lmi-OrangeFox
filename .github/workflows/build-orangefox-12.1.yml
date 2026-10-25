@@ -192,12 +192,19 @@ jobs:
 
           export USE_CCACHE=1
           export CCACHE_DIR="$HOME/.ccache"
-          if command -v ccache >/dev/null 2>&1; then
-            ccache -M 7G
+          # 显式给 CCACHE_EXEC：A16 起 ccache.mk 不再自动 `which ccache`，
+          # 12.1 虽然还能自动探测，但显式写死不依赖版本行为更稳。
+          export CCACHE_EXEC="$(command -v ccache || true)"
+          if [ -n "$CCACHE_EXEC" ]; then
+            ccache -M 6G
             ccache -o compression=true
-            # 源码里大量 __DATE__/__TIME__，默认会让命中率归零；跨 run 复用必须放行
-            ccache -o sloppiness=time_macros,file_stat_matches
+            ccache -o sloppiness=time_macros,include_file_mtime,file_macro
+            ccache -o compiler_check=content
+            echo "--- 本次恢复到的 ccache 现状（全是 0 = 缓存没命中）---"
+            ccache -s -v | head -20 || true
             ccache -z
+          else
+            echo "!!! 没找到 ccache，本轮不会有编译缓存"
           fi
 
           # mka 是 Lineage/TWRP 侧的封装，AOSP 原生 envsetup 只提供 m；缺哪个换哪个
