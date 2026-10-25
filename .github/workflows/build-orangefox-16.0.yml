@@ -130,19 +130,33 @@ jobs:
           paths = set(re.findall(r'<project\b[^>]*\bpath="([^"]+)"', xml))
           # 与 recovery 构建无关的项目（前缀匹配，带 / 的是目录前缀）
           PREFIX = ("cts", "sdk",
-                    "developers/", "test/",
+                    "developers/",
                     "device/generic/", "device/google/", "device/amlogic/",
                     "device/asus/", "device/brcm/", "device/linaro/",
                     "device/ti/", "device/sample/",
                     "kernel/prebuilts",        # GKI 预编译内核：我们用设备树的 prebuilt/kernel
                     "prebuilts/android-emulator", "prebuilts/qemu-kernel")
+          # test/ 绝对不能整目录删：A16 注册 soong 模块类型的插件就放在 test/ 下，
+          # 删掉后 frameworks/base、art 的 Android.bp 会报 unrecognized module type
+          # "csuite_test"（实测）。这里沿用上一轮已经成功编译验证过的显式子集。
+          TEST_EXACT = {
+              "test/dittosuite", "test/robolectric-extensions",
+              "test/mlts/benchmark", "test/mlts/models",
+              "test/cts-root", "test/mts", "test/suite_harness",
+              "test/vts", "test/catbox",
+              "test/vts-testcase/hal", "test/vts-testcase/kernel",
+              "test/vts-testcase/nbu", "test/vts-testcase/performance",
+              "test/vts-testcase/security", "test/vts-testcase/vndk",
+          }
           def hit(p):
+              if p in TEST_EXACT:
+                  return True
               for x in PREFIX:
                   if p == x:
                       return True
                   if x.endswith("/") and p.startswith(x):
                       return True
-                  if x.endswith("/") is False and p.startswith(x + "/"):
+                  if not x.endswith("/") and p.startswith(x + "/"):
                       return True
               return False
           killed = sorted(p for p in paths if hit(p))
