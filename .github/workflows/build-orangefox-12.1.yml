@@ -13,6 +13,14 @@ on:
         description: "lunch 目标"
         required: false
         default: "twrp_lmi-eng"
+      use_cache:
+        description: "是否使用 ccache 编译缓存（断点/冷编译实验可关）"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
 
 permissions:
   contents: read
@@ -25,6 +33,7 @@ concurrency:
 env:
   FOX_BRANCH: ${{ github.event.inputs.fox_branch || '12.1' }}
   BUILD_TARGET: ${{ github.event.inputs.build_target || 'twrp_lmi-eng' }}
+  USE_CACHE: ${{ github.event.inputs.use_cache || 'true' }}
   FOX_DIR: /home/runner/fox_12.1
   # ---- AOSP 构建环境调优 ----
   ALLOW_MISSING_DEPENDENCIES: "true"  # recovery 构建允许缺失的非必需依赖（测试套件等）
@@ -42,7 +51,7 @@ jobs:
       - name: 检出设备树
         uses: actions/checkout@v4
 
-      - name: 释放磁盘空间
+      - name: 准备构建环境（磁盘 + swap + 依赖 + repo + JDK）
         run: |
           echo "=== 清理预装工具链以腾出空间 ==="
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
@@ -52,8 +61,7 @@ jobs:
           sudo apt-get clean >/dev/null 2>&1 || true
           df -h /
 
-      - name: 添加 swap
-        run: |
+
           # 7G 物理内存 + 24G swap：lunch/kati 阶段内存峰值高，参考上游的 24G 配置
           sudo swapoff -a 2>/dev/null || true
           sudo fallocate -l 24G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=24576
@@ -63,8 +71,7 @@ jobs:
           free -h
           df -h /
 
-      - name: 安装编译依赖
-        run: |
+
           set -euo pipefail
           PKGS="bc bison build-essential ccache flex gperf imagemagick liblz4-tool \
                  libncurses-dev libssl-dev lzop pngcrush rsync schedtool zip zlib1g-dev"
@@ -83,9 +90,7 @@ jobs:
           done
           df -h /
 
-      - name: 安装 repo 工具
-        run: |
-          set -euo pipefail
+
           mkdir -p "$HOME/bin"
           curl -fsSL --retry 3 https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
@@ -95,9 +100,7 @@ jobs:
           git config --global user.email "actions@github.com"
           "$HOME/bin/repo" --version || true
 
-      - name: 选择 JDK 11
-        run: |
-          set -euo pipefail
+
           # AOSP 12.1 需要 JDK 11（runner 默认 17），优先用镜像自带的 11 号 JDK
           if [ -n "${JAVA_HOME_11_X64:-}" ] && [ -d "$JAVA_HOME_11_X64" ]; then
             echo "JAVA_HOME=$JAVA_HOME_11_X64" >> "$GITHUB_ENV"
@@ -166,6 +169,7 @@ jobs:
           test -f "$DEST/prebuilt/kernel"
 
       - name: 恢复编译缓存 (ccache)
+        if: env.USE_CACHE == 'true'
         uses: actions/cache@v4
         with:
           path: ~/.ccache
@@ -173,7 +177,6 @@ jobs:
           key: ccache-${{ github.run_id }}
           restore-keys: |
             ccache-
-
       - name: 编译 Recovery 镜像
         run: |
           # 注意：这里绝对不能加 -u（nounset）——AOSP build/envsetup.sh 会引用未定义的 TOP，
@@ -217,7 +220,10 @@ jobs:
           # 显式给 CCACHE_EXEC：A16 起 ccache.mk 不再自动 `which ccache`，
           # 12.1 虽然还能自动探测，但显式写死不依赖版本行为更稳。
           export CCACHE_EXEC="$(command -v ccache || true)"
-          if [ -n "$CCACHE_EXEC" ]; then
+          if [ "${USE_CACHE:-true}" != "true" ]; then
+            echo "=== 按输入要求关闭 ccache（本轮为冷编译 / 断点实验）==="
+            export CCACHE_EXEC=""
+          elif [ -n "$CCACHE_EXEC" ]; then
             ccache -M 6G
             ccache -o compression=true
             ccache -o sloppiness=time_macros,include_file_mtime,file_macro
@@ -248,7 +254,80 @@ jobs:
             exit "$RC"
           fi
 
-      - name: 收集产物
+      - name: 断点分析（实际参与编译的源码项目）
+        if: always()
+        run: |
+          # 「断点分析」：从 ninja 依赖图反推 —— 这次编译到底用到了清单里的哪些项目。
+          # 结果写到 dist/unused-projects.txt，作为下一轮裁剪同步的依据。
+          # ccache 只影响编译命令跑不跑，不影响 ninja 依赖图，因此缓存不干扰本分析。
+          set -uo pipefail
+          cd "$FOX_DIR" || exit 1
+          MAN="${GITHUB_WORKSPACE}/manifest-resolved.xml"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          python3 - "$MAN" "$GITHUB_WORKSPACE/dist" <<'PYEOF'
+          import glob, os, re, subprocess, sys
+
+          man_path, outdir = sys.argv[1], sys.argv[2]
+          projects = set()
+          if os.path.exists(man_path):
+              txt = open(man_path, encoding="utf-8", errors="replace").read()
+              projects = set(re.findall(r'<project\b[^>]*\bpath="([^"]+)"', txt))
+          print(f"清单项目数: {len(projects)}")
+
+          files = set()
+          ninjas = glob.glob("out/*.ninja") + glob.glob("out/soong/*.ninja")
+          print(f"待解析 ninja 文件: {len(ninjas)} 个")
+          for nf in ninjas:
+              try:
+                  with open(nf, encoding="utf-8", errors="replace") as f:
+                      for line in f:
+                          if not line.startswith("build "):
+                              continue
+                          _, _, rest = line.partition(":")
+                          for tok in rest.split():
+                              if "/" not in tok or tok.startswith(("out/", "|", "-", "=", "/")):
+                                  continue
+                              files.add(tok.lstrip("./"))
+              except Exception as e:
+                  print(f"  跳过 {nf}: {e}")
+          print(f"依赖图里出现的源码文件: {len(files)}")
+
+          used = set()
+          for f in files:
+              parts = f.split("/")
+              for i in range(1, len(parts)):
+                  cand = "/".join(parts[:i])
+                  if cand in projects:
+                      used.add(cand)
+          used |= {p for p in projects if p.startswith("device/xiaomi/")}
+
+          unused = sorted(projects - used)
+          print(f"实际参与编译的项目: {len(used)}")
+          print(f"清单里但依赖图从未引用: {len(unused)}")
+          print("---- 未使用清单（下一轮剔除候选）----")
+          for p in unused:
+              print("  " + p)
+
+          with open(os.path.join(outdir, "used-projects.txt"), "w") as f:
+              f.write("\n".join(sorted(used)) + "\n")
+          with open(os.path.join(outdir, "unused-projects.txt"), "w") as f:
+              f.write("\n".join(unused) + "\n")
+
+          print("---- 未使用项目体积 Top ----")
+          sizes = []
+          for p in unused[:40]:
+              try:
+                  out = subprocess.run(["du", "-sk", p], capture_output=True,
+                                       text=True, timeout=30).stdout.split()
+                  if out:
+                      sizes.append((int(out[0]), p))
+              except Exception:
+                  pass
+          for kb, p in sorted(sizes, reverse=True)[:15]:
+              print(f"  {kb/1024:8.1f} MB  {p}")
+          PYEOF
+
+      - name: 收集并校验产物
         if: always()
         run: |
           set -uo pipefail
@@ -277,10 +356,7 @@ jobs:
             cp "$GITHUB_WORKSPACE/build.log" dist/build.log
           fi
 
-      - name: 校验产物（镜像结构 + A16 关键能力）
-        if: always()
-        run: |
-          set -uo pipefail
+
           IMG="$FOX_DIR/out/target/product/lmi/recovery.img"
           if [ ! -f "$IMG" ]; then
             echo "没有 recovery.img（编译未产出），跳过校验"
@@ -346,11 +422,3 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
-      - name: 上传编译日志
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-log-${{ github.run_number }}
-          path: build.log
-          if-no-files-found: ignore
-          retention-days: 30
