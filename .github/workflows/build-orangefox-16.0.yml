@@ -288,7 +288,24 @@ jobs:
           free -h
           df -h /
 
-          source build/envsetup.sh || { echo "!!! envsetup.sh 执行失败"; exit 1; }
+          # OrangeFox 给 envsetup 追加的 orangefox_envsetup()，末尾那条
+          #   [ -s $FOX_MANIFEST_ROOT/.../vts/Android.mk ] && echo -n "" > ...
+          # 目标文件不存在时条件为假 → 函数返回 1 → source 整体报错，但 lunch 已就绪。
+          # 先兜底成恒真，再用 lunch 是否可用来判定真实成败。
+          if grep -q '^[[:space:]]*\[ -s \$FOX_MANIFEST_ROOT' build/make/envsetup.sh; then
+            sed -i '/^[[:space:]]*\[ -s \$FOX_MANIFEST_ROOT/ s|$|; true|' build/make/envsetup.sh
+            echo "已给 orangefox_envsetup 末行兜底:"
+            grep -n '\[ -s \$FOX_MANIFEST_ROOT' build/make/envsetup.sh
+          fi
+
+          ENV_RC=0
+          source build/envsetup.sh || ENV_RC=$?
+          if ! command -v lunch >/dev/null 2>&1; then
+            echo "!!! envsetup 返回 $ENV_RC 且 lunch 未定义 —— 抓定位信息"
+            bash -e -x -c 'source build/envsetup.sh' 2>&1 | tail -40 || true
+            exit 1
+          fi
+          echo "envsetup 返回码: $ENV_RC（lunch 可用，继续）"
 
           # A16 三段式 lunch：release 用 bp2a（vendor/twrp/vars/aosp_target_release）
           lunch "$BUILD_TARGET" \
