@@ -15,24 +15,30 @@ A/B        | A-only
 
 ## Build
 
-### Clone & Sync Source
+### Clone & Sync Source (Android 16 / fox_16.0)
 ```
-mkdir ~/OrangeFox_sync
-cd ~/OrangeFox_sync
-git clone https://gitlab.com/OrangeFox/sync.git
-cd ~/OrangeFox_sync/sync
-./orangefox_sync.sh --branch 12.1 --path ~/fox_12.1
+mkdir ~/fox_16.0
+cd ~/fox_16.0
+repo init --depth=1 -u https://gitlab.com/OrangeFox/Manifest.git -b fox_16.0
+repo sync -c -j32 --force-sync --no-clone-bundle --no-tags
 ```
 ### Clone Device-tree
 ```
-cd ~/fox_12.1/device
-mkdir -p xiaomi
-cd xiaomi
-git clone https://github.com/wenjie2333/orangefox_device_xiaomi_lmi.git lmi
+mkdir -p ~/fox_16.0/device/xiaomi
+cd ~/fox_16.0/device/xiaomi
+git clone -b fox_12.1 https://github.com/FreeAsCrazy/lmi-recovery1.git lmi
 ```
 ### BUILD!
 ```
-cd ~/fox_12.1
+cd ~/fox_16.0
 source build/envsetup.sh
-lunch twrp_lmi-eng
-mka recoveryimage
+lunch twrp_lmi-bp2a-eng
+mka recoveryimage -j$(($(nproc) * 2))
+```
+
+> A16 适配要点（GitHub Actions 工作流已自动处理）：
+> - `PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false`（4KB 页内核 + 4K 对齐预编译 ELF 豁免 16KB 检查）
+> - `TARGET_RECOVERY_PIXEL_FORMAT` 去掉裸双引号（否则破坏 soong extra.variables JSON）
+> - 删除设备树里硬编码的 `PLATFORM_VERSION`
+> - `PRODUCT_SHIPPING_API_LEVEL := 36`；lunch 走三段式 `twrp_lmi-bp2a-eng`
+> - 源码侧兜底 `AID_MEDIA_RW`、修 openaes 的 K&R 旧式 C 警告升级

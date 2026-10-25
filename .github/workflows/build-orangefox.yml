@@ -1,35 +1,37 @@
-name: 编译 OrangeFox Recovery (lmi)
+name: 编译 OrangeFox Recovery 16.0 (lmi)
 
-# 手动触发构建橙狐 Recovery（设备：Xiaomi lmi / POCO F2 Pro）
-# 工作流中的加固手法参考 FreeAsCrazy/lmi-recovery 的 build-lmi-recovery.yml
+# 手动触发：编译最新版橙狐（Android 16 / fox_16.0，设备 Xiaomi lmi）
+# 基础：OrangeFox 完整清单 fox_16.0（AOSP A16 + 橙狐 fork）
+# 加固手法参考 FreeAsCrazy/lmi-recovery 的 build-lmi-recovery.yml（A16 踩坑经验）
 on:
   workflow_dispatch:
     inputs:
       fox_branch:
-        description: "OrangeFox 源码分支"
+        description: "OrangeFox 清单分支"
         required: false
-        default: "12.1"
+        default: "fox_16.0"
       build_target:
         description: "lunch 目标"
         required: false
-        default: "twrp_lmi-eng"
+        default: "twrp_lmi-bp2a-eng"
 
 permissions:
   contents: read
 
-# 同仓库同一时刻只跑一个构建，新触发排队而不打断进行中的编译
+# 同一仓库同时只跑一个构建，新触发排队而不打断进行中的编译
 concurrency:
   group: orangefox-build
   cancel-in-progress: false
 
 env:
-  FOX_BRANCH: ${{ github.event.inputs.fox_branch || '12.1' }}
-  BUILD_TARGET: ${{ github.event.inputs.build_target || 'twrp_lmi-eng' }}
-  FOX_DIR: /home/runner/fox_12.1
-  # ---- AOSP 构建环境调优 ----
-  ALLOW_MISSING_DEPENDENCIES: "true"  # recovery 构建允许缺失的非必需依赖（测试套件等）
+  FOX_BRANCH: ${{ github.event.inputs.fox_branch || 'fox_16.0' }}
+  BUILD_TARGET: ${{ github.event.inputs.build_target || 'twrp_lmi-bp2a-eng' }}
+  FOX_DIR: /home/runner/fox_16.0
+  FOX_MANIFEST: https://gitlab.com/OrangeFox/Manifest.git
+  # ---- AOSP 构建环境 ----
+  ALLOW_MISSING_DEPENDENCIES: "true"  # recovery 构建允许缺失的非必需依赖
   GOMEMLIMIT: 12GiB                   # 压住 soong(Go) 分析 Android.bp 的内存峰值
-  LC_ALL: C                           # 统一排序/工具链输出，避免 locale 差异
+  LC_ALL: C
 
 jobs:
   build:
@@ -54,7 +56,7 @@ jobs:
 
       - name: 添加 swap
         run: |
-          # 7G 物理内存 + 24G swap：lunch/kati 阶段内存峰值高，参考上游的 24G 配置
+          # 7G 物理内存 + 24G swap：lunch/kati 阶段内存峰值高
           sudo swapoff -a 2>/dev/null || true
           sudo fallocate -l 24G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=24576
           sudo chmod 600 /swapfile
@@ -66,14 +68,16 @@ jobs:
       - name: 安装编译依赖
         run: |
           set -euo pipefail
-          PKGS="bc bison build-essential ccache flex gperf imagemagick liblz4-tool \
-                 libncurses-dev libssl-dev lzop pngcrush rsync schedtool zip zlib1g-dev"
+          PKGS="bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg \
+                 gperf imagemagick libc6-dev-i386 libelf-dev libgl1-mesa-dev liblz4-tool \
+                 libncurses-dev libssl-dev libx11-dev lzop openjdk-17-jdk pngcrush python3 \
+                 python3-pip rsync schedtool xsltproc zip zlib1g-dev"
           # apt 索引过期/网络抖动时 install 会失败：update 后重试一次
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $PKGS || {
             sudo apt-get update -qq
             sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends $PKGS
           }
-          # noble 移除了 libncurses5/libtinfo5，部分 AOSP prebuilt clang 仍链 libtinfo.so.5；
+          # noble 移除了 libncurses5/libtinfo5，而 AOSP 预编译 clang 需要 libtinfo.so.5；
           # 从 focal 池补装（best-effort，404 或冲突都不阻断构建）
           N=6.2-0ubuntu2.1
           for P in libtinfo5 libncurses5; do
@@ -90,45 +94,76 @@ jobs:
           curl -fsSL --retry 3 https://storage.googleapis.com/git-repo-downloads/repo -o "$HOME/bin/repo"
           chmod +x "$HOME/bin/repo"
           echo "$HOME/bin" >> "$GITHUB_PATH"
-          # repo 的部分操作会读取 git 身份，先配好避免探测失败
           git config --global user.name "GitHub Actions"
           git config --global user.email "actions@github.com"
+          git config --global --add safe.directory '*'
           "$HOME/bin/repo" --version || true
 
-      - name: 选择 JDK 11
+      - name: 选择 JDK 17
         run: |
           set -euo pipefail
-          # AOSP 12.1 需要 JDK 11（runner 默认 17），优先用镜像自带的 11 号 JDK
-          if [ -n "${JAVA_HOME_11_X64:-}" ] && [ -d "$JAVA_HOME_11_X64" ]; then
-            echo "JAVA_HOME=$JAVA_HOME_11_X64" >> "$GITHUB_ENV"
-            echo "$JAVA_HOME_11_X64/bin" >> "$GITHUB_PATH"
+          # AOSP 16 需要 JDK 17
+          if [ -n "${JAVA_HOME_17_X64:-}" ] && [ -d "$JAVA_HOME_17_X64" ]; then
+            echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+            echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
           fi
           java -version 2>&1 || true
 
-      - name: 同步 OrangeFox 源码
+      - name: 同步 OrangeFox 16.0 源码
         run: |
           set -euo pipefail
-          SYNC_DIR="$HOME/OrangeFox_sync/sync"
-          if [ ! -d "$SYNC_DIR/.git" ]; then
-            mkdir -p "$HOME/OrangeFox_sync"
-            git clone --depth 1 https://gitlab.com/OrangeFox/sync.git "$SYNC_DIR"
-          fi
-          cd "$SYNC_DIR"
-          chmod +x orangefox_sync.sh
-          # 同步失败（网络抖动/半途补丁）就清空目标目录重来：补丁不重复应用，
-          # 而 twrp-12.1 是浅克隆 + 最小 manifest，重来只多花约 5 分钟
-          ok=false
-          for i in 1 2 3; do
-            rm -rf "$FOX_DIR"
-            if ./orangefox_sync.sh --branch "$FOX_BRANCH" --path "$FOX_DIR"; then
-              ok=true
+          mkdir -p "$FOX_DIR"
+          cd "$FOX_DIR"
+          echo "=== repo init（完整橙狐清单 + 浅克隆）==="
+          repo init --depth=1 -u "$FOX_MANIFEST" -b "$FOX_BRANCH"
+
+          # 橙狐清单自带 remove-minimal.xml（已剔除 600+ 无关项目），这里再补一刀：
+          # 干掉 cts/sdk/test 等与 recovery 无关的大块。只对"清单里确实存在"的路径生效，
+          # 否则 repo 会因 remove-project 指向不存在项目而解析失败。
+          repo manifest -o "$RUNNER_TEMP/manifest.xml"
+          mkdir -p .repo/local_manifests
+          {
+            echo '<manifest>'
+            for p in cts sdk developers/build developers/samples/android \
+                     device/generic/arm64 device/generic/armv7-a-neon device/generic/art \
+                     device/generic/car device/generic/common device/generic/goldfish \
+                     device/generic/goldfish-opengl device/generic/trusty device/generic/x86 \
+                     device/generic/x86_64 device/google/atv device/google/contexthub \
+                     device/google/common/etm device/google/cuttlefish \
+                     device/google/cuttlefish_prebuilts device/google/cuttlefish_vmm \
+                     device/google/trout \
+                     test/dittosuite test/robolectric-extensions test/mlts/benchmark \
+                     test/mlts/models test/cts-root test/mts test/suite_harness \
+                     test/vts test/vts-testcase/hal test/vts-testcase/kernel \
+                     test/vts-testcase/nbu test/vts-testcase/performance \
+                     test/vts-testcase/security test/vts-testcase/vndk test/catbox; do
+              grep -qE "(path|name)=\"$p\"" "$RUNNER_TEMP/manifest.xml" &&
+                echo "  <remove-project path=\"$p\" />"
+            done
+            echo '</manifest>'
+          } > .repo/local_manifests/remove.xml
+          echo "=== 已排除 $(grep -c remove-project .repo/local_manifests/remove.xml) 个项目 ==="
+          cat .repo/local_manifests/remove.xml
+
+          echo "=== repo sync ==="
+          success=false
+          for i in 1 2 3 4 5; do
+            if repo sync -c -j32 --force-sync --no-clone-bundle --no-tags --retry-fetches=5; then
+              success=true
               break
             fi
-            echo "=== 第 $i 次同步失败，20 秒后重试 ==="
+            echo "=== 第 $i 次 repo sync 失败，20 秒后重试 ==="
             sleep 20
           done
-          [ "$ok" = true ]
-          test -f "$FOX_DIR/build/envsetup.sh"
+          [ "$success" = true ]
+
+          # .repo 体积大且构建不需要它；GKI 预编译内核与 recovery 无关，但会加大 soong 分析内存
+          du -sh .repo 2>/dev/null || true
+          rm -rf .repo
+          rm -rf kernel/prebuilts
+          test -f build/envsetup.sh
+          test -d vendor/twrp
+          test -d bootable/recovery
           df -h /
 
       - name: 放入设备树
@@ -141,24 +176,108 @@ jobs:
           rm -rf "$DEST/.git"
           ls -la "$DEST"
           grep OF_MAINTAINER "$DEST/vendorsetup.sh"
-          test -f "$DEST/prebuilt/kernel"
+
+      - name: 应用 A16 兼容补丁
+        run: |
+          set -euo pipefail
+          cd "$FOX_DIR"
+          D=device/xiaomi/lmi
+
+          echo "===== 一、设备树适配 A16 ====="
+
+          # 1) A16 对预编译 ELF 强制 16KB 页对齐检查。lmi 是 4KB 页内核，且 recovery/root 里
+          #    全是 4K 对齐的老 HIDL 二进制 —— 用检查器官方开关全局豁免
+          grep -q 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE' "$D/device.mk" ||
+            echo 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' >> "$D/device.mk"
+          grep -q 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE := false' "$D/device.mk"
+
+          # 2) BoardConfig 里带裸双引号的值会破坏 soong 的 extra.variables JSON
+          #    （TARGET_RECOVERY_PIXEL_FORMAT 在 vendor/twrp 的 EXPORT_TO_SOONG 名单里）
+          sed -i 's/^\(TARGET_RECOVERY_PIXEL_FORMAT *:*= *\)"\(.*\)"$/\1\2/' "$D/BoardConfig.mk"
+          grep -q 'TARGET_RECOVERY_PIXEL_FORMAT := RGBX_8888' "$D/BoardConfig.mk"
+
+          # 3) 本树是 12.1 时代的，硬编码 PLATFORM_VERSION 会与 A16 的版本体系打架 → 交给构建系统
+          sed -i -e '/^PLATFORM_VERSION := /d' -e '/^PLATFORM_VERSION_LAST_STABLE := /d' "$D/BoardConfig.mk"
+
+          # 4) 出货 API 对齐 A16
+          sed -i 's/^PRODUCT_SHIPPING_API_LEVEL := 29/PRODUCT_SHIPPING_API_LEVEL := 36/' "$D/device.mk"
+          grep -q 'PRODUCT_SHIPPING_API_LEVEL := 36' "$D/device.mk"
+
+          # 5) A16 的 lunch 走三段式；release 由 vendor/twrp/vars/aosp_target_release 指定（=bp2a）
+          sed -i 's/twrp_lmi-eng/twrp_lmi-bp2a-eng/' "$D/AndroidProducts.mk"
+          grep -q 'twrp_lmi-bp2a-eng' "$D/AndroidProducts.mk"
+
+          # 6) 少编一个 toolbox（recovery 已用 toybox），省时间与内存
+          if grep -q '^TW_USE_TOOLBOX := true' "$D/BoardConfig.mk"; then
+            sed -i 's/^TW_USE_TOOLBOX := true/TW_USE_TOOLBOX := false/' "$D/BoardConfig.mk"
+          fi
+          grep '^TW_USE_TOOLBOX' "$D/BoardConfig.mk"
+
+          echo "===== 二、A16 源码侧修补 ====="
+
+          # 1) AID_MEDIA_RW 在 A16 里仍然是 1023（libcutils 私有头），但这些源文件没把它引进来，
+          #    会集体报 use of undeclared identifier → 用等值定义兜底
+          patched=0
+          for f in $(grep -rl "AID_MEDIA_RW" bootable/recovery --include='*.cpp' --include='*.h' 2>/dev/null || true); do
+            if ! grep -q '#define AID_MEDIA_RW' "$f"; then
+              sed -i "1s|^|#ifndef AID_MEDIA_RW\n#define AID_MEDIA_RW 1023  /* 与 AOSP libcutils 私有头一致 */\n#endif\n\n|" "$f"
+              patched=$((patched + 1))
+            fi
+          done
+          echo "AID_MEDIA_RW 兜底完成：$patched 个文件"
+          grep -q '#define AID_MEDIA_RW 1023' bootable/recovery/partitionmanager.cpp
+
+          # 2) openaes 是 K&R 旧式 C 代码，A16 的 clang 默认把 deprecated-non-prototype 升级成错误
+          if [ -f bootable/recovery/openaes/Android.mk ]; then
+            sed -i 's/LOCAL_CFLAGS:= -g -c -W/LOCAL_CFLAGS:= -g -c -W -std=gnu99 -Wno-error=deprecated-non-prototype/' \
+              bootable/recovery/openaes/Android.mk
+            grep -q 'Wno-error=deprecated-non-prototype' bootable/recovery/openaes/Android.mk
+          fi
+
+          # 3) 清单已移除 test/vts*，但 build/make 的 test-suite 展开仍引用 vts/tvts
+          if grep -q 'device-tests vts tvts art-host-tests' build/make/core/main.mk; then
+            sed -i 's/device-tests vts tvts art-host-tests/device-tests art-host-tests/' build/make/core/main.mk
+            grep -q 'device-tests art-host-tests' build/make/core/main.mk
+
+            # 4) libvts_vintf_test_common 被 assemble_vintf 硬依赖，但定义在被移除的
+            #    test/vts-testcase/hal 里 → 只补这一模块的 3 个小文件，不整仓恢复
+            VLIB=test/vts-testcase/hal/treble/vintf/libvts_vintf_test_common
+            if [ ! -f "$VLIB/Android.bp" ]; then
+              VURL=https://android.googlesource.com/platform/test/vts-testcase/hal/+/master/treble/vintf/libvts_vintf_test_common
+              mkdir -p "$VLIB/include/libvts_vintf_test_common"
+              curl -fsSL --retry 3 "$VURL/Android.bp?format=TEXT" | base64 -d > "$VLIB/Android.bp"
+              curl -fsSL --retry 3 "$VURL/common.cpp?format=TEXT" | base64 -d > "$VLIB/common.cpp"
+              curl -fsSL --retry 3 "$VURL/include/libvts_vintf_test_common/common.h?format=TEXT" | base64 -d > "$VLIB/include/libvts_vintf_test_common/common.h"
+            fi
+            grep -q 'name: "libvts_vintf_test_common"' "$VLIB/Android.bp"
+            [ -s "$VLIB/common.cpp" ]
+            echo "libvts_vintf_test_common 已补齐"
+          else
+            echo "main.mk 无需 vts/tvts 补丁（清单已处理）"
+          fi
+
+          echo "===== 三、核对结果 ====="
+          grep -n 'PRODUCT_CHECK_PREBUILT_MAX_PAGE_SIZE\|PRODUCT_SHIPPING_API_LEVEL' "$D/device.mk"
+          grep -n 'TARGET_RECOVERY_PIXEL_FORMAT\|TW_USE_TOOLBOX\|^PLATFORM_VERSION' "$D/BoardConfig.mk"
+          grep -n 'LUNCH' "$D/AndroidProducts.mk"
+          df -h /
 
       - name: 恢复编译缓存 (ccache)
         uses: actions/cache@v4
         with:
           path: ~/.ccache
           # key 每轮必 miss，靠 restore-keys 回源最近一次缓存；post 阶段再存一份新的
-          key: ccache-${{ github.run_id }}
+          key: ccache-a16-${{ github.run_id }}
           restore-keys: |
+            ccache-a16-
             ccache-
 
       - name: 编译 Recovery 镜像
         run: |
-          # 注意：这里绝对不能加 -u（nounset）——AOSP build/envsetup.sh 会引用未定义的 TOP，
-          # 上一轮就是被 "TOP: unbound variable" 直接打断的。
+          # 注意：这里绝对不能加 -u（nounset）——AOSP build/envsetup.sh 会引用未定义的 TOP
           cd "$FOX_DIR" || exit 1
 
-          # 内存守护：每 30 秒打一张内存快照，runner 若被宿主 OOM 回收可在日志留证
+          # 内存守护：每 30 秒打一张内存快照，runner 被宿主 OOM 回收时日志里可留证
           ( while true; do
               echo "[$(date +%H:%M:%S)] $(free -h | awk '/^Mem:/{print "mem_used="$3" mem_avail="$4} /^Swap:/{print "swap_used="$3}')"
               sleep 30
@@ -170,7 +289,12 @@ jobs:
           df -h /
 
           source build/envsetup.sh || { echo "!!! envsetup.sh 执行失败"; exit 1; }
-          lunch "$BUILD_TARGET" || { echo "!!! lunch 失败: $BUILD_TARGET"; exit 1; }
+
+          # A16 三段式 lunch：release 用 bp2a（vendor/twrp/vars/aosp_target_release）
+          lunch "$BUILD_TARGET" \
+            || lunch twrp_lmi-ap3a-eng \
+            || lunch twrp_lmi-ap2a-eng \
+            || { echo "!!! lunch 失败: $BUILD_TARGET"; exit 1; }
 
           export USE_CCACHE=1
           export CCACHE_DIR="$HOME/.ccache"
@@ -180,19 +304,22 @@ jobs:
             ccache -z
           fi
 
-          # mka 是 Lineage/TWRP 侧的封装，AOSP 原生 envsetup 只提供 m；缺哪个换哪个
+          # mka 是 TWRP/Lineage 侧的封装，AOSP 原生 envsetup 只提供 m；缺哪个换哪个
           if command -v mka >/dev/null 2>&1; then
             BUILD_CMD=mka
           else
             BUILD_CMD=m
           fi
-          echo "使用编译命令: $BUILD_CMD recoveryimage"
-          "$BUILD_CMD" recoveryimage 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
+          echo "使用编译命令: $BUILD_CMD recoveryimage -j$(($(nproc) * 2))"
+          "$BUILD_CMD" recoveryimage -j$(($(nproc) * 2)) 2>&1 | tee "$GITHUB_WORKSPACE/build.log"
           RC=${PIPESTATUS[0]}
           ccache -s || true
+
           if [ "$RC" -ne 0 ]; then
             echo "===== 编译失败（exit=$RC），日志最后 80 行 ====="
             tail -80 "$GITHUB_WORKSPACE/build.log" || true
+            echo "===== soong extra.variables 前 45 行（JSON 坏行排查）====="
+            sed -n '1,45p' out/soong/soong.twrp_lmi.extra.variables 2>&1 || true
             exit "$RC"
           fi
 
@@ -205,7 +332,7 @@ jobs:
           if [ -f "$OUT/recovery.img" ]; then
             VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
                   "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1)
-            [ -z "$VER" ] && VER="$FOX_BRANCH"
+            [ -z "$VER" ] && VER="16.0"
             NAME="OrangeFox-${VER}-lmi-$(date +%Y%m%d).img"
             cp -v "$OUT/recovery.img" "dist/$NAME"
             echo "文件名: $NAME"
@@ -226,7 +353,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: OrangeFox-lmi-${{ github.run_number }}
+          name: OrangeFox-lmi-16.0-${{ github.run_number }}
           path: dist/
           if-no-files-found: warn
           retention-days: 90
