@@ -20,7 +20,7 @@ permissions:
 
 # 同一仓库同时只跑一个构建，新触发排队而不打断进行中的编译
 concurrency:
-  group: orangefox-build
+  group: orangefox-build-16
   cancel-in-progress: false
 
 env:
