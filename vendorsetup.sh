@@ -81,7 +81,7 @@ if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 	export OF_DEFAULT_TIMEZONE="UTC-8" # 默认时区设置为中国标准时间
 	
 	# 特殊设置
-	export OF_MAINTAINER="wenjie233" # 维护者名称
+	export OF_MAINTAINER="opencode" # 维护者名称
 	export FOX_BUILD_TYPE="Unofficial" # 构建类型：官方/非官方
 	export OF_ENABLE_ALL_PARTITION_TOOLS=1 # 启用所有分区工具
 	export FOX_DELETE_AROMAFM=1 # 删除Aroma文件管理器
