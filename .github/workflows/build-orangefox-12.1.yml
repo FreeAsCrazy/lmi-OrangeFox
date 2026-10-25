@@ -115,6 +115,17 @@ jobs:
           fi
           cd "$SYNC_DIR"
           chmod +x orangefox_sync.sh
+
+          # orangefox_sync.sh 内部写的是 `repo sync ... -j$(nproc --all)`，
+          # GitHub runner 只有 4 核 → 等于 -j4，拉几十 GB 完全是串行的。
+          # 拉源码是网络密集型，和 CPU 核数无关，提到 -j32 才能吃满带宽；
+          # 顺带补上 --retry-fetches（脚本自己没带，弱网下会整轮失败）。
+          sed -i -e 's/-j\$(nproc --all)/-j32/g' \
+                 -e 's/repo sync -c -j4/repo sync -c -j32/g' \
+                 -e 's/--no-tags "\$@"/--no-tags --retry-fetches=5 "$@"/' \
+                 orangefox_sync.sh
+          echo "=== 打补丁后的 sync 命令 ==="
+          grep -n 'repo sync' orangefox_sync.sh
           # 同步失败（网络抖动/半途补丁）就清空目标目录重来：补丁不重复应用，
           # 而 twrp-12.1 是浅克隆 + 最小 manifest，重来只多花约 5 分钟
           ok=false
