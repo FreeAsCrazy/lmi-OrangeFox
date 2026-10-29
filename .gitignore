@@ -1,0 +1,12 @@
+# Build outputs
+out/
+*.img
+*.zip
+*.log
+
+# Local-only state
+.local/
+
+# Python
+__pycache__/
+*.pyc
