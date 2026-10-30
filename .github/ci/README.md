@@ -32,7 +32,7 @@
 | `sync-source.sh` | `repo init`、生成裁剪 manifest、`repo sync`、删除 `.repo` 和 GKI 预编译内核。 |
 | `apply-patches.sh` | 设备树 A16 适配、源码兼容修补，并调用 `patches/` 下的补丁。 |
 | `build-recovery.sh` | 配置 lunch 和 ccache，编译 `recoveryimage`，只生成 `recovery.img`。 |
-| `collect-image.sh` | 按 `OrangeFox-<版本>-lmi-A16-<时间戳>.img` 命名、校验并放入 `dist/`。 |
+| `collect-image.sh` | 按 `OrangeFox-<版本>-<分支>-lmi-<时间戳>.img` 命名、校验并放入 `dist/`。 |
 | `verify-recovery.py` | 校验 boot 头、ramdisk 布局、`system/bin/recovery` 和 erofs。 |
 
 工作流只负责调用这些脚本和上传 artifact，不再内联大段构建逻辑。

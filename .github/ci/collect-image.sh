@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 收集 recovery.img，按 OrangeFox-<版本>-lmi-A16-<时间戳>.img 命名并校验。
+# 收集 recovery.img，按 OrangeFox-<版本>-<分支>-lmi-<时间戳>.img 命名并校验。
 set -euo pipefail
 
 : "${FOX_DIR:?FOX_DIR not set}"
@@ -29,8 +29,11 @@ fi
 [ -n "$FOX_VER" ] || FOX_VER="R12.0"
 FOX_VER=$(printf '%s' "$FOX_VER" | sed -E 's/[^A-Za-z0-9._-]+/-/g')
 
+FOX_BRANCH_TAG=${FOX_BRANCH:-fox_16.0}
+FOX_BRANCH_TAG=$(printf '%s' "$FOX_BRANCH_TAG" | sed -E 's/^fox_/fox/; s/[^A-Za-z0-9._-]+/-/g')
+
 TS=$(date +%Y%m%d%H%M%S)
-BASE="OrangeFox-${FOX_VER}-lmi-A16-${TS}"
+BASE="OrangeFox-${FOX_VER}-${FOX_BRANCH_TAG}-lmi-${TS}"
 echo "PRODUCT_BASE=${BASE}" >> "$GITHUB_ENV"
 IMG_SRC="$GITHUB_WORKSPACE/dist/${BASE}.img"
 cp -v "$OUT_IMG" "$IMG_SRC"
