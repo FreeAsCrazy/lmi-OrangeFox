@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 收集 recovery.img，按 OrangeFox-<版本>-<分支>-lmi-<时间戳>.img 命名并校验。
+# 收集 recovery.img，按 OrangeFox-<分支>-lmi-<年月日时分>.img 命名并校验。
 set -euo pipefail
 
 : "${FOX_DIR:?FOX_DIR not set}"
@@ -16,24 +16,11 @@ if [ ! -f "$OUT_IMG" ]; then
 fi
 echo "镜像源文件: $OUT_IMG"
 
-FOX_VER=""
-for img in "$OUT"/OrangeFox-*.img; do
-  [ -f "$img" ] || continue
-  FOX_VER=$(basename "$img" | sed -nE 's/^OrangeFox-([^-]+)-.*/\1/p')
-  [ -n "$FOX_VER" ] && break
-done
-if [ -z "$FOX_VER" ]; then
-  FOX_VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
-            "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1) || true
-fi
-[ -n "$FOX_VER" ] || FOX_VER="R12.0"
-FOX_VER=$(printf '%s' "$FOX_VER" | sed -E 's/[^A-Za-z0-9._-]+/-/g')
-
 FOX_BRANCH_TAG=${FOX_BRANCH:-fox_16.0}
 FOX_BRANCH_TAG=$(printf '%s' "$FOX_BRANCH_TAG" | sed -E 's/^fox_/fox/; s/[^A-Za-z0-9._-]+/-/g')
 
-TS=$(date +%Y%m%d%H%M%S)
-BASE="OrangeFox-${FOX_VER}-${FOX_BRANCH_TAG}-lmi-${TS}"
+TS=$(date +%Y%m%d%H%M)
+BASE="OrangeFox-${FOX_BRANCH_TAG}-lmi-${TS}"
 echo "PRODUCT_BASE=${BASE}" >> "$GITHUB_ENV"
 IMG_SRC="$GITHUB_WORKSPACE/dist/${BASE}.img"
 cp -v "$OUT_IMG" "$IMG_SRC"
