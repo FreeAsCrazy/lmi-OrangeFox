@@ -57,7 +57,8 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.ccache
-        key: ccache-a16-${{ github.run_id }}
+        # run_attempt 避免同一次运行 Re-run 时撞上不可变的 cache key。
+        key: ccache-a16-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
           ccache-a16-
       id: ccache
