@@ -81,11 +81,11 @@ if [ "$1" = "$FDEVICE" -o "$FOX_BUILD_DEVICE" = "$FDEVICE" ]; then
 	export OF_DEFAULT_TIMEZONE="UTC-8" # 默认时区设置为中国标准时间
 	
 	# 特殊设置
-	export OF_MAINTAINER="2026年10月语言模型" # 维护者名称
+	export OF_MAINTAINER="OpenCode+DeepSeek" # 维护者名称
 	export FOX_BUILD_TYPE="Unofficial" # 构建类型：官方/非官方
 	export OF_ENABLE_ALL_PARTITION_TOOLS=1 # 启用所有分区工具
-	export FOX_DELETE_AROMAFM=1 # 删除Aroma文件管理器
-	export FOX_DELETE_MAGISK_ADDON=1 # 不打包 Magisk 附加组件
+	export FOX_DELETE_AROMAFM=0 # 保留 Aroma 文件管理器
+	export FOX_DELETE_MAGISK_ADDON=0 # 打包 Magisk 附加组件
 
 	# let's see what are our build VARs
 	if [ -n "$FOX_BUILD_LOG_FILE" -a -f "$FOX_BUILD_LOG_FILE" ]; then

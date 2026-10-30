@@ -251,6 +251,14 @@ jobs:
         {
           printf '<manifest>\n'
           sed 's/.*/  <remove-project path="&" \/>/' "$REMOVE_TMP"
+          # OrangeFox 的这两个 fork 当前匿名访问会跳转 GitLab 登录页（403）。
+          # 改用 AOSP 原始仓库，避免 repo sync 因这两个项目整体失败。
+          cat <<'AOSP_REPLACE_EOF'
+            <remove-project path="external/libvpx" />
+            <remove-project path="external/libwebm" />
+            <project path="external/libvpx" name="platform/external/libvpx" remote="aosp" revision="refs/tags/android-16.0.0_r1" />
+            <project path="external/libwebm" name="platform/external/libwebm" remote="aosp" revision="refs/tags/android-16.0.0_r1" />
+        AOSP_REPLACE_EOF
           printf '</manifest>\n'
         } > .repo/local_manifests/remove.xml
 
