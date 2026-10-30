@@ -65,10 +65,15 @@ jobs:
     - name: 编译 Recovery 镜像
       run: bash "$GITHUB_WORKSPACE/.github/ci/build-recovery.sh"
     - name: 检查 ccache 新增
-      if: always()
+      if: always() && !cancelled()
       id: ccache_new
       run: |
         set -uo pipefail
+        if ! command -v ccache >/dev/null 2>&1; then
+          echo "save=false" >> "$GITHUB_OUTPUT"
+          echo "ccache 未安装，跳过缓存保存"
+          exit 0
+        fi
         misses=$(ccache -s 2>/dev/null | awk '/^[[:space:]]*Misses:/{print $2; exit}')
         case "${misses:-}" in ''|*[!0-9]*) misses=0;; esac
         matched='${{ steps.ccache.outputs.cache-matched-key }}'
@@ -81,7 +86,7 @@ jobs:
           echo "ccache misses=0 matched=$matched，跳过重复保存"
         fi
     - name: 保存 ccache
-      if: always() && steps.ccache_new.outputs.save == 'true'
+      if: always() && !cancelled() && steps.ccache_new.outputs.save == 'true'
       uses: actions/cache/save@v4
       with:
         path: ~/.ccache
