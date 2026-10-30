@@ -71,7 +71,7 @@ jobs:
           bc bison build-essential ccache curl flex g++-multilib gcc-multilib git gnupg
           gperf imagemagick libc6-dev-i386 libelf-dev libgl1-mesa-dev liblz4-tool zstd
           libncurses-dev libssl-dev libx11-dev lzop openjdk-17-jdk pngcrush python3
-          python3-pip rsync schedtool xsltproc zip zlib1g-dev
+          python3-pip rsync schedtool xsltproc unzip zip zlib1g-dev
         )
         apt_install() {
           sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@"
@@ -728,43 +728,63 @@ jobs:
       with:
         path: ~/.ccache
         key: ${{ steps.ccache.outputs.cache-primary-key }}
-    - name: 收集并校验产物
+    - name: 收集并校验卡刷包
       if: success()
       run: |
         set -uo pipefail
         rm -rf dist
         mkdir -p dist
         OUT="$FOX_DIR/out/target/product/lmi"
-        IMG_SRC="$OUT/recovery.img"
+        OUT_IMG="$OUT/recovery.img"
 
-        if [ ! -f "$IMG_SRC" ]; then
+        if [ ! -f "$OUT_IMG" ]; then
           echo "错误：没有找到 recovery.img"
           exit 1
         fi
 
-        # 从 OrangeFox zip 名提取版本；失败时使用默认版本。
-        FOX_VER=""
+        # 优先选择完整版 OrangeFox 卡刷包，跳过 lite 版本。
+        ZIP_SRC=""
         for z in "$OUT"/*.zip; do
           [ -f "$z" ] || continue
           base=$(basename "$z")
           case "$base" in
-            OrangeFox-*)
-              FOX_VER=$(printf '%s\n' "$base" | sed -nE 's/^OrangeFox-([^-]+)-.*/\1/p')
-              ;;
+            *_lite.zip) continue ;;
+            OrangeFox-*.zip) ZIP_SRC="$z"; break ;;
           esac
-          [ -n "$FOX_VER" ] && break
         done
+        if [ -z "$ZIP_SRC" ]; then
+          echo "错误：没有找到 OrangeFox 卡刷包 zip"
+          ls -lh "$OUT"/*.zip 2>/dev/null || true
+          exit 1
+        fi
+        echo "卡刷包源文件: $ZIP_SRC"
+
+        # 从 OrangeFox zip 名提取版本；失败时使用默认版本。
+        FOX_VER=$(basename "$ZIP_SRC" | sed -nE 's/^OrangeFox-([^-]+)-.*/\1/p')
         if [ -z "$FOX_VER" ]; then
           FOX_VER=$(grep -oP '(FOX_MAINTAINER_PATCH_VERSION|FOX_VERSION)\s*=\s*"\K[^"]+' \
                     "$FOX_DIR/device/xiaomi/lmi/vendorsetup.sh" 2>/dev/null | head -1) || true
         fi
         [ -n "$FOX_VER" ] || FOX_VER="R12.0"
+        FOX_VER=$(printf '%s' "$FOX_VER" | sed -E 's/[^A-Za-z0-9._-]+/-/g')
 
         TS=$(date +%Y%m%d%H%M%S)
         BASE="OrangeFox-${FOX_VER}-lmi-A16-${TS}"
         echo "PRODUCT_BASE=${BASE}" >> "$GITHUB_ENV"
-        cp -v "$IMG_SRC" "dist/${BASE}.img"
-        echo "产物: dist/${BASE}.img"
+        cp -v "$ZIP_SRC" "dist/${BASE}.zip"
+        echo "产物: dist/${BASE}.zip"
+
+        echo "=== 卡刷包完整性 ==="
+        unzip -t "dist/${BASE}.zip" >/dev/null
+        IMG_ENTRY=$(unzip -Z1 "dist/${BASE}.zip" | grep -E '(^|/)recovery\.img$' | head -1 || true)
+        if [ -z "$IMG_ENTRY" ]; then
+          echo "错误：卡刷包内没有 recovery.img"
+          exit 1
+        fi
+        echo "  [OK]   zip 校验通过，包含 ${IMG_ENTRY}"
+
+        echo "=== 卡刷包内 sdcard/Fox 内容 ==="
+        unzip -Z1 "dist/${BASE}.zip" | grep '^sdcard/Fox/' | sort || true
 
         echo "=== 产物 ==="
         ls -lh dist/ || true
@@ -772,6 +792,13 @@ jobs:
 
         TMP_VERIFY=$(mktemp -d)
         trap 'rm -rf "$TMP_VERIFY"' EXIT
+        unzip -p "dist/${BASE}.zip" "$IMG_ENTRY" > "$TMP_VERIFY/recovery.img"
+        IMG_SRC="$TMP_VERIFY/recovery.img"
+        if [ ! -s "$IMG_SRC" ]; then
+          echo "错误：无法从卡刷包中提取 recovery.img"
+          exit 1
+        fi
+
         fail=0
         check() {
           if [ "$1" -eq 0 ]; then echo "  [OK]   $2"; else echo "  [FAIL] $2"; fail=1; fi
@@ -798,11 +825,11 @@ jobs:
         echo
         if [ "$fail" -eq 0 ]; then echo "校验结论：通过"; else echo "校验结论：有问题（见上面 [FAIL]）"; fi
         exit "$fail"
-    - name: 上传构建产物
+    - name: 上传卡刷包
       if: success()
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.PRODUCT_BASE }}
-        path: dist/*.img
+        path: dist/*.zip
         if-no-files-found: error
         retention-days: 7
