@@ -1,0 +1,6 @@
+<remove-project path="external/libvpx" />
+<remove-project path="external/libwebm" />
+<remove-project path="external/foxcli" />
+<project path="external/foxcli" name="external/foxcli" remote="OrangeFox" revision="288f5579550ebd0d5e6325c1844a65bd3fb42d8c" />
+<project path="external/libvpx" name="platform/external/libvpx" remote="aosp" revision="refs/tags/android-16.0.0_r1" />
+<project path="external/libwebm" name="platform/external/libwebm" remote="aosp" revision="refs/tags/android-16.0.0_r1" />
